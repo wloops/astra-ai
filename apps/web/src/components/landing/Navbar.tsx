@@ -1,29 +1,46 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
+import { Clock, ArrowRightCircle } from 'lucide-react';
 
 export function Navbar() {
+  const scrollTo = (id: string) => {
+    const el = document.getElementById(id);
+    if (el) el.scrollIntoView({ behavior: 'smooth' });
+  };
+
   return (
-    <nav className="fixed top-0 left-0 right-0 z-50 bg-white/70 backdrop-blur-lg border-b border-white/20">
-      <div className="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
-        <Link to="/" className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-teal-400 to-blue-600 flex items-center justify-center text-white shadow-lg shadow-teal-500/20">
-            <svg viewBox="0 0 24 24" fill="none" className="w-6 h-6">
-              <path d="M12 4L4 20H8L12 12L16 20H20L12 4Z" fill="currentColor" />
-            </svg>
-          </div>
-          <span className="font-bold text-2xl tracking-tight text-slate-900">Agora AI</span>
-        </Link>
-        <div className="hidden md:flex items-center gap-8 font-medium text-slate-600">
-          <a href="#features" className="hover:text-slate-900 transition-colors">功能特性</a>
-          <a href="#solutions" className="hover:text-slate-900 transition-colors">解决方案</a>
-          <a href="#pricing" className="hover:text-slate-900 transition-colors">价格</a>
+    <nav className="fixed top-0 left-0 right-0 z-50 bg-white/80 backdrop-blur-md border-b border-slate-100">
+      <div className="max-w-[1400px] mx-auto px-6 h-16 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <img src="/astra-logo.png" alt="Astra AI" className="w-10 h-10" />
+          <span className="text-xl font-bold text-slate-900 tracking-tight">Astra AI</span>
         </div>
+
+        <div className="hidden md:flex items-center gap-8 text-sm font-medium text-slate-600">
+          {[
+            ['features', '产品能力'],
+            ['use-cases', '适用场景'],
+            ['workflow', '工作流'],
+            ['cta', '演示案例'],
+          ].map(([id, label]) => (
+            <button
+              key={id}
+              onClick={() => scrollTo(id)}
+              className="hover:text-blue-600 transition-colors cursor-pointer bg-transparent border-none p-0"
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
         <div className="flex items-center gap-4">
-          <Link to="/dashboard" className="px-5 py-2.5 text-sm font-medium text-slate-600 hover:text-slate-900 transition-colors">
-            登录
-          </Link>
-          <Link to="/dashboard" className="px-5 py-2.5 text-sm font-semibold text-white bg-slate-900 rounded-full hover:bg-slate-800 transition-all shadow-lg hover:shadow-xl hover:-translate-y-0.5">
-            免费开始使用
+          <button className="hidden md:flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-600 bg-slate-50 hover:bg-slate-100 rounded-full transition-colors border border-slate-200">
+            <Clock size={16} />
+            会议历史
+          </button>
+          <Link to="/dashboard" className="flex items-center gap-2 px-5 py-2 text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-700 hover:to-cyan-600 rounded-full shadow-md shadow-blue-500/20 transition-all">
+            <ArrowRightCircle size={16} />
+            进入工作台
           </Link>
         </div>
       </div>

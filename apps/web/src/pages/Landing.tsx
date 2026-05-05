@@ -1,22 +1,24 @@
-import React from "react";
-import { Navbar } from "../components/landing/Navbar";
-import { Hero } from "../components/landing/Hero";
-import { Features } from "../components/landing/Features";
+import React from 'react';
+import { Navbar } from '../components/landing/Navbar';
+import { Hero } from '../components/landing/Hero';
+import { WorkflowSection } from '../components/landing/WorkflowSection';
+import { UseCasesSection } from '../components/landing/UseCasesSection';
+import { FeaturesSection } from '../components/landing/FeaturesSection';
+import { CTASection } from '../components/landing/CTASection';
+import { Footer } from '../components/landing/Footer';
 
 export function Landing() {
   return (
-    <div className="min-h-screen bg-[#F8FAFF] overflow-x-hidden relative font-sans">
-      {/* Abstract Background Splashes */}
-      <div className="absolute top-0 left-0 w-full h-[600px] overflow-hidden z-0 pointer-events-none">
-        <div className="absolute -top-[20%] -left-[10%] w-[50%] h-[80%] rounded-full bg-blue-100/40 blur-[120px] mix-blend-multiply opacity-70"></div>
-        <div className="absolute top-[10%] right-[10%] w-[40%] h-[70%] rounded-full bg-teal-50/50 blur-[120px] mix-blend-multiply opacity-60"></div>
-      </div>
-
+    <div className="min-h-screen bg-[#FAFAFA] font-sans text-slate-900 selection:bg-blue-200 selection:text-blue-900">
       <Navbar />
-      <div className="relative z-10">
+      <main>
         <Hero />
-        <Features />
-      </div>
+        <WorkflowSection />
+        <UseCasesSection />
+        <FeaturesSection />
+        <CTASection />
+      </main>
+      <Footer />
     </div>
   );
 }
