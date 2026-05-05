@@ -1,7 +1,12 @@
 import React from "react";
 import { Search, ChevronDown, List, LayoutGrid } from "lucide-react";
 
-export function ProjectFilters() {
+interface ProjectFiltersProps {
+  searchQuery?: string;
+  onSearchChange?: (query: string) => void;
+}
+
+export function ProjectFilters({ searchQuery = "", onSearchChange }: ProjectFiltersProps) {
   return (
     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mt-2">
       <div className="flex items-center gap-3 w-full sm:w-auto">
@@ -10,6 +15,8 @@ export function ProjectFilters() {
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
           <input
             type="text"
+            value={searchQuery}
+            onChange={(e) => onSearchChange?.(e.target.value)}
             placeholder="搜索项目名称或关键词"
             className="w-full h-9 pl-9 pr-4 text-sm rounded-lg bg-white border border-slate-200 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all placeholder:text-slate-400"
           />

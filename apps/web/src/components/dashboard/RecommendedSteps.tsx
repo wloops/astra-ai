@@ -1,75 +1,57 @@
 import React from "react";
 import { cn } from "../../lib/utils";
+import type { DiscussionSession, Project } from "../../api/types";
 
-export function RecommendedSteps() {
+interface RecommendedStepsProps {
+  sessions?: DiscussionSession[];
+  projects?: Project[];
+}
+
+export function RecommendedSteps({ sessions: externalSessions, projects: externalProjects }: RecommendedStepsProps) {
+  const sessions = externalSessions ?? [];
+  const projects = externalProjects ?? [];
+
+  const completedCount = sessions.filter((s) => s.status === "completed").length;
+  const lowCompletenessProjects = projects.filter((p) => p.completeness < 60);
+
   const steps = [
     {
-      title: "完善项目上下文",
-      desc: "为「智能合同审查平台」补充更多上下文，提升研讨质量",
-      btnText: "去完善",
+      title: lowCompletenessProjects.length > 0 ? "完善项目上下文" : "发起新的研讨",
+      desc:
+        lowCompletenessProjects.length > 0
+          ? `还有 ${lowCompletenessProjects.length} 个项目上下文完整度不足60%`
+          : "发起一场多 Agent 智能研讨，验证产品功能",
+      btnText: lowCompletenessProjects.length > 0 ? "去完善" : "去发起",
       iconColor: "text-teal-600",
       iconBg: "bg-teal-50",
       icon: (
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          className="w-5 h-5"
-        >
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
           <path d="M12 3v18" />
           <rect width="18" height="18" x="3" y="3" rx="2" />
         </svg>
       ),
     },
     {
-      title: "跟进行动项",
-      desc: "还有 7 个行动项待跟进，推动项目落地",
+      title: "查看会议历史",
+      desc: completedCount > 0 ? `已有 ${completedCount} 次完成的研讨，回顾历史结论` : "会议历史为空，完成首次研讨后即可查看",
       btnText: "去查看",
       iconColor: "text-orange-500",
       iconBg: "bg-orange-50",
       icon: (
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          className="w-5 h-5"
-        >
-          <path d="M16 2v4" />
-          <path d="M8 2v4" />
-          <path d="M3 10h18" />
-          <path d="M17 14h-6" />
-          <path d="M13 18H7" />
-          <path d="M7 14h.01" />
-          <path d="M17 18h.01" />
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+          <path d="M16 2v4" /><path d="M8 2v4" /><path d="M3 10h18" /><path d="M17 14h-6" /><path d="M13 18H7" /><path d="M7 14h.01" /><path d="M17 18h.01" />
           <rect width="18" height="18" x="3" y="4" rx="2" />
         </svg>
       ),
     },
     {
-      title: "回顾历史结论",
-      desc: "回顾过往关键结论，避免重复讨论",
-      btnText: "去回顾",
+      title: "管理角色与场景",
+      desc: "配置 Agent 角色和场景模板以适配你的业务需求",
+      btnText: "去配置",
       iconColor: "text-purple-600",
       iconBg: "bg-purple-50",
       icon: (
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          className="w-5 h-5"
-        >
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
           <circle cx="12" cy="12" r="10" />
           <path d="M12 6v6l4 2" />
         </svg>

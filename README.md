@@ -46,6 +46,16 @@ npm run dev
 
 后端开发脚本默认使用本地 SQLite 数据库，并在启动时写入演示项目、角色和场景模板。
 
+要启用真实 LLM 驱动的 AI 审议能力，在后端运行环境中配置：
+
+```bash
+ASTRA_LLM_BASE_URL=https://api.openai.com/v1/chat/completions
+ASTRA_LLM_API_KEY=sk-...
+ASTRA_LLM_MODEL=gpt-4o-mini
+```
+
+`ASTRA_LLM_BASE_URL` 应指向 OpenAI-compatible Chat Completions endpoint。配置 `ASTRA_LLM_BASE_URL` 和 `ASTRA_LLM_API_KEY` 后，后端的 LangGraph 审议阶段会通过 LLM Gateway 调用真实模型；未配置或远程调用失败时会自动使用本地确定性 fallback。
+
 ## 验证
 
 ```bash

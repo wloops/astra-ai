@@ -80,10 +80,38 @@ async def _stage_pause() -> None:
     await asyncio.sleep(0.1)
 
 
+def _risk_items(role_outputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    risks: list[dict[str, Any]] = []
+    for item in role_outputs:
+        for risk in item.get("risks", []):
+            if isinstance(risk, dict):
+                risks.append(risk)
+            else:
+                risks.append({"name": str(risk), "level": "medium"})
+    return risks
+
+
+def _unique_questions(*question_groups: list[str]) -> list[str]:
+    seen: set[str] = set()
+    questions: list[str] = []
+    for group in question_groups:
+        for question in group:
+            if question not in seen:
+                seen.add(question)
+                questions.append(question)
+    return questions
+
+
 async def init_session(state: WorkflowState) -> WorkflowState:
     with Session(engine, expire_on_commit=False) as db:
         update_session(db, state["session_id"], status=SessionStatus.RUNNING, current_stage="init_session")
-        record_event(db, session_id=state["session_id"], event_type=EventType.SESSION_STARTED, stage="init_session", payload={"message": "智能研讨已启动"})
+        record_event(
+            db,
+            session_id=state["session_id"],
+            event_type=EventType.SESSION_STARTED,
+            stage="init_session",
+            payload={"message": "智能研讨已启动"},
+        )
     await _stage_pause()
     return state
 
@@ -119,9 +147,28 @@ async def clarify_topic(state: WorkflowState) -> WorkflowState:
     state["open_questions"] = output.get("open_questions", [])
     with Session(engine, expire_on_commit=False) as db:
         update_session(db, state["session_id"], current_stage="clarify_topic")
-        record_event(db, session_id=state["session_id"], event_type=EventType.STAGE_STARTED, stage="clarify_topic", payload={"message": "AI 主持人开始澄清议题"})
-        record_event(db, session_id=state["session_id"], event_type=EventType.AGENT_MESSAGE, stage="clarify_topic", role_code="host", payload=output)
-        record_event(db, session_id=state["session_id"], event_type=EventType.STAGE_COMPLETED, stage="clarify_topic", payload={"message": "议题澄清完成"})
+        record_event(
+            db,
+            session_id=state["session_id"],
+            event_type=EventType.STAGE_STARTED,
+            stage="clarify_topic",
+            payload={"message": "AI 主持人开始澄清议题"},
+        )
+        record_event(
+            db,
+            session_id=state["session_id"],
+            event_type=EventType.AGENT_MESSAGE,
+            stage="clarify_topic",
+            role_code="host",
+            payload=output,
+        )
+        record_event(
+            db,
+            session_id=state["session_id"],
+            event_type=EventType.STAGE_COMPLETED,
+            stage="clarify_topic",
+            payload={"message": "议题澄清完成"},
+        )
     await _stage_pause()
     return state
 
@@ -130,63 +177,129 @@ async def independent_review(state: WorkflowState) -> WorkflowState:
     outputs: list[dict[str, Any]] = []
     with Session(engine, expire_on_commit=False) as db:
         update_session(db, state["session_id"], current_stage="independent_review")
-        record_event(db, session_id=state["session_id"], event_type=EventType.STAGE_STARTED, stage="independent_review", payload={"message": "专家角色开始独立评审"})
+        record_event(
+            db,
+            session_id=state["session_id"],
+            event_type=EventType.STAGE_STARTED,
+            stage="independent_review",
+            payload={"message": "专家角色开始独立评审"},
+        )
     for role in state["roles"]:
         if role.code == "host":
             continue
         output = await gateway.complete_structured(role=role, stage="independent_review", topic=state["topic"], project=state["project"], context={})
         outputs.append({"role_code": role.code, "role_name": role.name, **output})
         with Session(engine, expire_on_commit=False) as db:
-            record_event(db, session_id=state["session_id"], event_type=EventType.AGENT_MESSAGE, stage="independent_review", role_code=role.code, payload=output)
+            record_event(
+                db,
+                session_id=state["session_id"],
+                event_type=EventType.AGENT_MESSAGE,
+                stage="independent_review",
+                role_code=role.code,
+                payload=output,
+            )
         await _stage_pause()
     state["role_outputs"] = outputs
     with Session(engine, expire_on_commit=False) as db:
-        record_event(db, session_id=state["session_id"], event_type=EventType.STAGE_COMPLETED, stage="independent_review", payload={"message": "独立评审完成"})
+        record_event(
+            db,
+            session_id=state["session_id"],
+            event_type=EventType.STAGE_COMPLETED,
+            stage="independent_review",
+            payload={"message": "独立评审完成"},
+        )
     return state
 
 
 async def detect_conflict(state: WorkflowState) -> WorkflowState:
-    conflicts = [
-        {
-            "title": "效率收益与财务风控边界",
-            "supporting_view": "产品视角认为小额自动结算能显著缩短报销周期。",
-            "cautious_view": "测试和架构视角要求先补齐异常回退、审计和幂等控制。",
-            "judgement": "可以推进 MVP，但必须限制范围并满足前置控制条件。",
-        }
-    ]
+    context = {"role_outputs": state.get("role_outputs", [])}
+    output = await gateway.complete_structured(
+        role=None,
+        stage="detect_conflict",
+        topic=state["topic"],
+        project=state["project"],
+        context=context,
+    )
+    conflicts = output.get("conflicts", [])
     state["conflicts"] = conflicts
     with Session(engine, expire_on_commit=False) as db:
         update_session(db, state["session_id"], current_stage="detect_conflict")
-        record_event(db, session_id=state["session_id"], event_type=EventType.CONFLICT_DETECTED, stage="detect_conflict", payload={"conflicts": conflicts})
-        record_event(db, session_id=state["session_id"], event_type=EventType.STAGE_COMPLETED, stage="detect_conflict", payload={"message": "争议识别完成"})
+        record_event(
+            db,
+            session_id=state["session_id"],
+            event_type=EventType.CONFLICT_DETECTED,
+            stage="detect_conflict",
+            payload={"conflicts": conflicts, "summary": output.get("summary", "")},
+        )
+        record_event(
+            db,
+            session_id=state["session_id"],
+            event_type=EventType.STAGE_COMPLETED,
+            stage="detect_conflict",
+            payload={"message": "争议识别完成"},
+        )
     await _stage_pause()
     return state
 
 
 async def debate(state: WorkflowState) -> WorkflowState:
+    context = {"conflicts": state.get("conflicts", []), "role_outputs": state.get("role_outputs", [])}
+    output = await gateway.complete_structured(
+        role=None,
+        stage="debate",
+        topic=state["topic"],
+        project=state["project"],
+        context=context,
+    )
     with Session(engine, expire_on_commit=False) as db:
         update_session(db, state["session_id"], current_stage="debate")
-        record_event(db, session_id=state["session_id"], event_type=EventType.STAGE_STARTED, stage="debate", payload={"message": "围绕关键争议进行交叉辩论"})
+        record_event(
+            db,
+            session_id=state["session_id"],
+            event_type=EventType.STAGE_STARTED,
+            stage="debate",
+            payload={"message": "围绕关键争议进行交叉辩论"},
+        )
         record_event(
             db,
             session_id=state["session_id"],
             event_type=EventType.AGENT_MESSAGE,
             stage="debate",
             role_code="host",
-            payload={"summary": "辩论结论：业务价值成立，但上线前必须完成异常回退、审计链路和灰度回滚设计。"},
+            payload=output,
         )
-        record_event(db, session_id=state["session_id"], event_type=EventType.STAGE_COMPLETED, stage="debate", payload={"message": "交叉辩论完成"})
+        record_event(
+            db,
+            session_id=state["session_id"],
+            event_type=EventType.STAGE_COMPLETED,
+            stage="debate",
+            payload={"message": "交叉辩论完成"},
+        )
     await _stage_pause()
     return state
 
 
 async def judge_and_summarize(state: WorkflowState) -> WorkflowState:
     role_outputs = state.get("role_outputs", [])
-    risks = [{"name": risk, "level": "medium"} for item in role_outputs for risk in item.get("risks", [])]
-    open_questions = list({question for item in role_outputs for question in item.get("open_questions", [])})
-    state["risks"] = risks
-    state["open_questions"] = state.get("open_questions", []) + open_questions
-    state["final_conclusion"] = "建议以受限 MVP 推进小额发票自动结算：仅覆盖 200 元及以下、OCR 与验真通过、无异常命中且审计记录完整的单据。"
+    role_risks = _risk_items(role_outputs)
+    role_questions = [question for item in role_outputs for question in item.get("open_questions", [])]
+    existing_questions = state.get("open_questions", [])
+    context = {
+        "role_outputs": role_outputs,
+        "conflicts": state.get("conflicts", []),
+        "risks": role_risks,
+        "open_questions": _unique_questions(existing_questions, role_questions),
+    }
+    output = await gateway.complete_structured(
+        role=None,
+        stage="judge_and_summarize",
+        topic=state["topic"],
+        project=state["project"],
+        context=context,
+    )
+    state["risks"] = output.get("risks") or role_risks
+    state["open_questions"] = _unique_questions(existing_questions, role_questions, output.get("open_questions", []))
+    state["final_conclusion"] = output.get("final_conclusion") or output.get("summary", "")
     with Session(engine, expire_on_commit=False) as db:
         update_session(db, state["session_id"], current_stage="judge_and_summarize")
         record_event(
@@ -195,23 +308,47 @@ async def judge_and_summarize(state: WorkflowState) -> WorkflowState:
             event_type=EventType.AGENT_MESSAGE,
             stage="judge_and_summarize",
             role_code="host",
-            payload={"summary": state["final_conclusion"], "risks": risks, "open_questions": state["open_questions"]},
+            payload={
+                "summary": state["final_conclusion"],
+                "stance": output.get("stance", "neutral"),
+                "risks": state["risks"],
+                "open_questions": state["open_questions"],
+            },
         )
-        record_event(db, session_id=state["session_id"], event_type=EventType.STAGE_COMPLETED, stage="judge_and_summarize", payload={"message": "结论归纳完成"})
+        record_event(
+            db,
+            session_id=state["session_id"],
+            event_type=EventType.STAGE_COMPLETED,
+            stage="judge_and_summarize",
+            payload={"message": "结论归纳完成"},
+        )
     await _stage_pause()
     return state
 
 
 async def generate_actions(state: WorkflowState) -> WorkflowState:
-    actions = [
-        {"title": "定义自动结算适用范围", "owner": "产品经理", "priority": "high", "status": "todo"},
-        {"title": "补充自动结算状态机和审计字段", "owner": "后端架构师", "priority": "high", "status": "todo"},
-        {"title": "制定异常场景验收用例", "owner": "测试工程师", "priority": "medium", "status": "todo"},
-    ]
-    state["actions"] = actions
+    context = {
+        "final_conclusion": state.get("final_conclusion", ""),
+        "risks": state.get("risks", []),
+        "open_questions": state.get("open_questions", []),
+    }
+    output = await gateway.complete_structured(
+        role=None,
+        stage="generate_actions",
+        topic=state["topic"],
+        project=state["project"],
+        context=context,
+    )
+    state["actions"] = output.get("actions", [])
     with Session(engine, expire_on_commit=False) as db:
         update_session(db, state["session_id"], current_stage="generate_actions")
-        record_event(db, session_id=state["session_id"], event_type=EventType.STAGE_COMPLETED, stage="generate_actions", payload={"actions": actions})
+        record_event(
+            db,
+            session_id=state["session_id"],
+            event_type=EventType.STAGE_COMPLETED,
+            stage="generate_actions",
+            payload={"actions": state["actions"], "summary": output.get("summary", "")},
+        )
     await _stage_pause()
     return state
 
@@ -239,7 +376,13 @@ async def finalize_minutes(state: WorkflowState) -> WorkflowState:
         db.add(result)
         db.commit()
         update_session(db, state["session_id"], status=SessionStatus.COMPLETED, current_stage="finalize_minutes", completed_at=utc_now())
-        record_event(db, session_id=state["session_id"], event_type=EventType.SESSION_COMPLETED, stage="finalize_minutes", payload={"result_id": result.id})
+        record_event(
+            db,
+            session_id=state["session_id"],
+            event_type=EventType.SESSION_COMPLETED,
+            stage="finalize_minutes",
+            payload={"result_id": result.id},
+        )
     return state
 
 

@@ -3,6 +3,9 @@ from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+API_DIR = Path(__file__).resolve().parents[2]
+
+
 class Settings(BaseSettings):
     """Runtime settings for the API service."""
 
@@ -13,7 +16,8 @@ class Settings(BaseSettings):
     event_poll_interval_seconds: float = 0.5
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        # 支持从仓库根目录启动，也支持把后端专用配置放在 apps/api/.env。
+        env_file=(".env", API_DIR / ".env"),
         env_prefix="ASTRA_",
         extra="ignore",
     )

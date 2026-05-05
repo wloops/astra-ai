@@ -1,28 +1,68 @@
 import React from "react";
 import { Clock, MoreHorizontal, ChevronRight } from "lucide-react";
 import { cn } from "../../lib/utils";
+import type { DiscussionSession, Project } from "../../api/types";
 
-export function RecentMeetings() {
-  const meetings = [
-    {
-      name: "差旅报销自动识别并自动结算方案讨论",
-      project: "企业极速差旅报销系统",
-      time: "5月20日 10:30",
-      status: "已完成",
-    },
-    {
-      name: "合同风险识别模型评估与优化建议",
-      project: "智能合同审查平台",
-      time: "5月19日 16:45",
-      status: "进行中",
-    },
-    {
-      name: "质检指标体系优化与权重设置研讨",
-      project: "客服质检优化平台",
-      time: "5月18日 09:15",
-      status: "已完成",
-    },
-  ];
+interface MeetingDisplay {
+  name: string;
+  project: string;
+  time: string;
+  status: string;
+}
+
+function formatTime(iso: string): string {
+  try {
+    const d = new Date(iso);
+    return `${d.getMonth() + 1}月${d.getDate()}日 ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  } catch {
+    return iso;
+  }
+}
+
+const STATUS_LABELS: Record<string, string> = {
+  pending: "待开始",
+  running: "进行中",
+  completed: "已完成",
+  failed: "失败",
+  paused: "已暂停",
+};
+
+function mapSessionToDisplay(s: DiscussionSession, projects: Project[]): MeetingDisplay {
+  const project = projects.find((p) => p.id === s.project_id);
+  return {
+    name: s.topic,
+    project: project?.name ?? s.project_id,
+    time: formatTime(s.created_at),
+    status: STATUS_LABELS[s.status] ?? s.status,
+  };
+}
+
+interface RecentMeetingsProps {
+  sessions?: DiscussionSession[];
+  projects?: Project[];
+}
+
+export function RecentMeetings({ sessions: externalSessions, projects = [] }: RecentMeetingsProps) {
+  const allSessions = externalSessions ?? [];
+  const displayMeetings = allSessions
+    .slice()
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    .slice(0, 3)
+    .map((s) => mapSessionToDisplay(s, projects));
+
+  if (displayMeetings.length === 0) {
+    return (
+      <div className="w-full mt-2">
+        <div className="flex items-center gap-2 mb-4 px-2">
+          <Clock className="w-5 h-5 text-slate-400" />
+          <h2 className="text-base font-semibold text-slate-900">最近会议</h2>
+        </div>
+        <div className="bg-white rounded-[20px] border border-slate-100 shadow-sm p-8 text-center text-slate-400 text-sm">
+          暂无会议记录，请先发起研讨
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="w-full mt-2">
@@ -43,7 +83,7 @@ export function RecentMeetings() {
             </tr>
           </thead>
           <tbody>
-            {meetings.map((m, idx) => (
+            {displayMeetings.map((m, idx) => (
               <tr
                 key={idx}
                 className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors last:border-0"
@@ -61,7 +101,9 @@ export function RecentMeetings() {
                       "text-xs font-medium px-2 py-1 rounded-md",
                       m.status === "已完成"
                         ? "text-teal-600 bg-teal-50"
-                        : "text-blue-600 bg-blue-50",
+                        : m.status === "进行中"
+                          ? "text-blue-600 bg-blue-50"
+                          : "text-slate-600 bg-slate-50",
                     )}
                   >
                     {m.status}

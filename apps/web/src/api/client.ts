@@ -28,9 +28,32 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const apiClient = {
+  // Projects
   listProjects: () => request<Project[]>("/projects"),
+  createProject: (payload: Partial<Project>) =>
+    request<Project>("/projects", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  // Agent Roles
   listAgentRoles: () => request<AgentRole[]>("/agent-roles"),
+  createAgentRole: (payload: Partial<AgentRole>) =>
+    request<AgentRole>("/agent-roles", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  // Scenario Templates
   listScenarioTemplates: () => request<ScenarioTemplate[]>("/scenario-templates"),
+  createScenarioTemplate: (payload: Partial<ScenarioTemplate>) =>
+    request<ScenarioTemplate>("/scenario-templates", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  // Sessions
+  listSessions: () => request<DiscussionSession[]>("/sessions"),
   createSession: (payload: SessionCreatePayload) =>
     request<DiscussionSession>("/sessions", {
       method: "POST",

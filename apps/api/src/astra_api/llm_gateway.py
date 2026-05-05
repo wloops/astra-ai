@@ -1,3 +1,4 @@
+import json
 from typing import Any
 
 import httpx
@@ -6,8 +7,97 @@ from astra_api.config import settings
 from astra_api.models import AgentRole, Project
 
 
+DEFAULT_OUTPUT: dict[str, Any] = {
+    "summary": "",
+    "stance": "neutral",
+    "risks": [],
+    "open_questions": [],
+    "actions": [],
+}
+
+
+STAGE_PROMPTS: dict[str, dict[str, Any]] = {
+    "clarify_topic": {
+        "system": "你是 Astra 的 AI 主持人。请澄清议题范围，识别需要补充确认的问题，并只输出 JSON。",
+        "schema": {
+            "summary": "对议题边界和决策目标的简短澄清",
+            "stance": "needs_structured_review | clear_enough | blocked",
+            "risks": ["初步风险"],
+            "open_questions": ["仍需确认的问题"],
+            "actions": [],
+        },
+    },
+    "independent_review": {
+        "system": "你是 Astra 专家审议中的一个角色。请基于角色职责给出独立观点，并只输出 JSON。",
+        "schema": {
+            "summary": "角色观点摘要",
+            "stance": "角色立场",
+            "risks": ["该角色识别的风险"],
+            "open_questions": ["该角色需要澄清的问题"],
+            "actions": ["该角色建议的行动"],
+        },
+    },
+    "detect_conflict": {
+        "system": "你是 Astra 的冲突识别器。请比较各角色观点，找出真实分歧，并只输出 JSON。",
+        "schema": {
+            "summary": "分歧识别摘要",
+            "stance": "conflicts_detected | no_major_conflict",
+            "conflicts": [
+                {
+                    "title": "争议点标题",
+                    "supporting_view": "支持推进的观点",
+                    "cautious_view": "审慎或反对的观点",
+                    "judgement": "主持人对争议的初步判断",
+                }
+            ],
+            "risks": ["由争议暴露的风险"],
+            "open_questions": ["需要补充判断的问题"],
+            "actions": [],
+        },
+    },
+    "debate": {
+        "system": "你是 Astra 的交叉辩论主持人。请围绕争议点综合各方论证，并只输出 JSON。",
+        "schema": {
+            "summary": "辩论归纳总结",
+            "stance": "debate_summarized",
+            "risks": ["辩论后仍需关注的风险"],
+            "open_questions": ["辩论后仍未解决的问题"],
+            "actions": [],
+        },
+    },
+    "judge_and_summarize": {
+        "system": "你是 Astra 的最终裁决与总结者。请综合全部中间材料，形成可执行结论，并只输出 JSON。",
+        "schema": {
+            "summary": "最终结论摘要",
+            "final_conclusion": "完整最终结论",
+            "stance": "approve | approve_with_conditions | reject | need_more_info",
+            "risks": [{"name": "风险名称", "level": "low | medium | high"}],
+            "open_questions": ["仍需确认的问题"],
+            "actions": [],
+        },
+    },
+    "generate_actions": {
+        "system": "你是 Astra 的行动项规划器。请把结论、风险和待确认问题转成清晰行动项，并只输出 JSON。",
+        "schema": {
+            "summary": "行动计划摘要",
+            "stance": "actions_generated",
+            "risks": [],
+            "open_questions": [],
+            "actions": [
+                {
+                    "title": "行动项标题",
+                    "owner": "负责人角色",
+                    "priority": "high | medium | low",
+                    "status": "todo",
+                }
+            ],
+        },
+    },
+}
+
+
 class LLMGateway:
-    """Single-model gateway with a deterministic local fallback for MVP demos."""
+    """Single-model gateway with stage-aware prompts and deterministic fallback."""
 
     async def complete_structured(
         self,
@@ -18,8 +108,16 @@ class LLMGateway:
         project: Project,
         context: dict[str, Any],
     ) -> dict[str, Any]:
+        prompt_config = STAGE_PROMPTS.get(stage, STAGE_PROMPTS["independent_review"])
         if settings.llm_base_url and settings.llm_api_key:
-            return await self._complete_remote(role=role, stage=stage, topic=topic, project=project, context=context)
+            return await self._complete_remote(
+                role=role,
+                stage=stage,
+                topic=topic,
+                project=project,
+                context=context,
+                prompt_config=prompt_config,
+            )
         return self._complete_local(role=role, stage=stage, topic=topic, project=project, context=context)
 
     async def _complete_remote(
@@ -30,28 +128,39 @@ class LLMGateway:
         topic: str,
         project: Project,
         context: dict[str, Any],
+        prompt_config: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        prompt_config = prompt_config or STAGE_PROMPTS.get(stage, STAGE_PROMPTS["independent_review"])
         role_name = role.name if role else "AI 主持人"
         prompt = (
-            f"你是 Astra 的{role_name}。请围绕阶段 {stage} 输出简洁 JSON。\n"
-            f"项目：{project.name}\n议题：{topic}\n上下文：{context}\n"
-            "JSON 字段：summary, stance, risks, open_questions, actions。"
+            f"角色：{role_name}\n"
+            f"阶段：{stage}\n"
+            f"项目：{project.name}\n"
+            f"议题：{topic}\n"
+            f"上下文 JSON：{json.dumps(context, ensure_ascii=False, default=str)}\n"
+            f"输出 JSON schema：{json.dumps(prompt_config['schema'], ensure_ascii=False)}\n"
+            "请严格返回一个 JSON object，不要使用 Markdown，不要补充 JSON 之外的文字。"
         )
         payload = {
             "model": settings.llm_model,
             "messages": [
-                {"role": "system", "content": "你输出严格 JSON，不要输出 Markdown。"},
+                {"role": "system", "content": prompt_config["system"]},
                 {"role": "user", "content": prompt},
             ],
             "temperature": 0.2,
         }
         headers = {"Authorization": f"Bearer {settings.llm_api_key}"}
-        async with httpx.AsyncClient(timeout=60) as client:
-            response = await client.post(settings.llm_base_url, json=payload, headers=headers)
-            response.raise_for_status()
-            data = response.json()
-        content = data["choices"][0]["message"]["content"]
-        return {"summary": content, "stance": "remote_model", "risks": [], "open_questions": [], "actions": []}
+        try:
+            async with httpx.AsyncClient(timeout=60) as client:
+                response = await client.post(self._chat_completions_url(settings.llm_base_url), json=payload, headers=headers)
+                response.raise_for_status()
+                data = response.json()
+            content = data["choices"][0]["message"]["content"]
+            parsed = self._parse_json_content(content)
+        except Exception:
+            # 远程模型不可用或返回非 JSON 时，保持 Session 可继续推进。
+            return self._complete_local(role=role, stage=stage, topic=topic, project=project, context=context)
+        return self._normalize_output(parsed, stage=stage)
 
     def _complete_local(
         self,
@@ -71,6 +180,50 @@ class LLMGateway:
                 "risks": project.risks[:2],
                 "open_questions": ["自动结算的异常回退规则是否完整？", "审计记录是否满足财务复核要求？"],
                 "actions": [],
+            }
+        if stage == "detect_conflict":
+            return {
+                **DEFAULT_OUTPUT,
+                "summary": "已识别效率收益与风险控制之间的核心争议。",
+                "stance": "conflicts_detected",
+                "conflicts": [
+                    {
+                        "title": "效率收益与财务风控边界",
+                        "supporting_view": "产品视角认为小额自动结算能显著缩短报销周期。",
+                        "cautious_view": "测试和架构视角要求先补齐异常回退、审计和幂等控制。",
+                        "judgement": "可以推进 MVP，但必须限制范围并满足前置控制条件。",
+                    }
+                ],
+            }
+        if stage == "debate":
+            return {
+                **DEFAULT_OUTPUT,
+                "summary": "辩论结论：业务价值成立，但上线前必须完成异常回退、审计链路和灰度回滚设计。",
+                "stance": "debate_summarized",
+            }
+        if stage == "judge_and_summarize":
+            conclusion = (
+                "建议以受限 MVP 推进小额发票自动结算：仅覆盖 200 元及以下、OCR 与验真通过、"
+                "无异常命中且审计记录完整的单据。"
+            )
+            return {
+                **DEFAULT_OUTPUT,
+                "summary": conclusion,
+                "final_conclusion": conclusion,
+                "stance": "approve_with_conditions",
+                "risks": [{"name": "异常场景覆盖不足会导致财务风险外溢", "level": "medium"}],
+                "open_questions": ["灰度试点的回滚标准是什么？"],
+            }
+        if stage == "generate_actions":
+            return {
+                **DEFAULT_OUTPUT,
+                "summary": "已生成围绕范围、架构控制和验收用例的行动项。",
+                "stance": "actions_generated",
+                "actions": [
+                    {"title": "定义自动结算适用范围", "owner": "产品经理", "priority": "high", "status": "todo"},
+                    {"title": "补充自动结算状态机和审计字段", "owner": "后端架构师", "priority": "high", "status": "todo"},
+                    {"title": "制定异常场景验收用例", "owner": "测试工程师", "priority": "medium", "status": "todo"},
+                ],
             }
         if role_code == "product_manager":
             return {
@@ -103,3 +256,43 @@ class LLMGateway:
             "open_questions": [],
             "actions": [],
         }
+
+    def _parse_json_content(self, content: str) -> dict[str, Any]:
+        text = content.strip()
+        if text.startswith("```"):
+            lines = text.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            text = "\n".join(lines).strip()
+        parsed = json.loads(text)
+        if not isinstance(parsed, dict):
+            raise ValueError("LLM response must be a JSON object")
+        return parsed
+
+    def _normalize_output(self, data: dict[str, Any], *, stage: str) -> dict[str, Any]:
+        output = dict(DEFAULT_OUTPUT)
+        output["summary"] = data["summary"] if isinstance(data.get("summary"), str) else ""
+        output["stance"] = data["stance"] if isinstance(data.get("stance"), str) else "neutral"
+        output["risks"] = data["risks"] if isinstance(data.get("risks"), list) else []
+        output["open_questions"] = data["open_questions"] if isinstance(data.get("open_questions"), list) else []
+        output["actions"] = data["actions"] if isinstance(data.get("actions"), list) else []
+
+        if stage == "detect_conflict":
+            output["conflicts"] = data["conflicts"] if isinstance(data.get("conflicts"), list) else []
+        if stage == "judge_and_summarize":
+            final_conclusion = data.get("final_conclusion")
+            output["final_conclusion"] = final_conclusion if isinstance(final_conclusion, str) else output["summary"]
+        return output
+
+    def _chat_completions_url(self, base_url: str | None) -> str:
+        if not base_url:
+            raise ValueError("LLM base URL is required")
+        url = base_url.rstrip("/")
+        # DeepSeek/OpenAI SDK 常配置 base_url；当前 Gateway 直接 POST，因此这里补齐 endpoint。
+        if url.endswith("/chat/completions"):
+            return url
+        if url.endswith("/v1"):
+            return f"{url}/chat/completions"
+        return f"{url}/chat/completions"

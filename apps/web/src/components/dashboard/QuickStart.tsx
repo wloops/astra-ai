@@ -40,7 +40,7 @@ export function QuickStart() {
           <ChevronRight className="w-5 h-5 text-white/50 group-hover:text-white transition-transform group-hover:translate-x-1" />
         </Link>
 
-        <button className="border border-slate-200 bg-slate-50/50 rounded-[16px] p-4 text-left flex items-center justify-between group hover:bg-slate-50 transition-all hover:border-slate-300">
+        <Link to="/session-history" className="border border-slate-200 bg-slate-50/50 rounded-[16px] p-4 text-left flex items-center justify-between group hover:bg-slate-50 transition-all hover:border-slate-300">
           <div className="flex items-center gap-4">
             <div className="w-10 h-10 border border-slate-200 bg-white rounded-xl flex items-center justify-center text-slate-500 group-hover:text-slate-700 transition-colors">
               <Clock className="w-5 h-5" />
@@ -55,9 +55,9 @@ export function QuickStart() {
             </div>
           </div>
           <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-slate-600 transition-transform group-hover:translate-x-1" />
-        </button>
+        </Link>
 
-        <button className="border border-slate-200 bg-slate-50/50 rounded-[16px] p-4 text-left flex items-center justify-between group hover:bg-slate-50 transition-all hover:border-slate-300">
+        <Link to="/project-context" className="border border-slate-200 bg-slate-50/50 rounded-[16px] p-4 text-left flex items-center justify-between group hover:bg-slate-50 transition-all hover:border-slate-300">
           <div className="flex items-center gap-4">
             <div className="w-10 h-10 border border-slate-200 bg-white rounded-xl flex items-center justify-center text-slate-500 group-hover:text-slate-700 transition-colors">
               <FolderCog className="w-5 h-5" />
@@ -72,7 +72,7 @@ export function QuickStart() {
             </div>
           </div>
           <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-slate-600 transition-transform group-hover:translate-x-1" />
-        </button>
+        </Link>
       </div>
     </div>
   );

@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 
+from astra_api.config import settings
 from astra_api.main import app
 
 
@@ -25,7 +26,10 @@ def test_seeded_registries_are_available() -> None:
     assert len(scenarios.json()) >= 1
 
 
-def test_session_workflow_produces_result() -> None:
+def test_session_workflow_produces_result_with_local_fallback(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "llm_base_url", None)
+    monkeypatch.setattr(settings, "llm_api_key", None)
+
     with client:
         project = client.get("/projects").json()[0]
         scenario = client.get("/scenario-templates").json()[0]
@@ -46,3 +50,7 @@ def test_session_workflow_produces_result() -> None:
     assert result["final_conclusion"]
     assert result["key_conflicts"]
     assert result["actions"]
+
+    session_response = client.get(f"/sessions/{session_id}")
+    assert session_response.status_code == 200
+    assert session_response.json()["status"] == "completed"

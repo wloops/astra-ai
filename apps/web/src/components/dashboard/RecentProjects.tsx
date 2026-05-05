@@ -1,40 +1,75 @@
 import React from "react";
-import { Folder, Briefcase, MessageSquareText, Headphones, ChevronRight } from "lucide-react";
+import { Folder, Briefcase, MessageSquareText, Headphones, ChevronRight, type LucideIcon } from "lucide-react";
 import { cn } from "../../lib/utils";
+import type { Project } from "../../api/types";
 
-export function RecentProjects() {
-  const projects = [
-    {
-      title: "企业极速差旅报销系统",
-      tag: "需求澄清",
-      tagColor: "text-green-600 bg-green-50",
-      desc: "企业级差旅报销系统（V2.0 智能化重构）",
-      contextValue: 92,
-      time: "5月20日 10:30",
-      iconBg: "bg-teal-50 text-teal-600",
-      icon: Briefcase,
-    },
-    {
-      title: "智能合同审查平台",
-      tag: "方案评审",
-      tagColor: "text-blue-600 bg-blue-50",
-      desc: "AI 驱动的合同智能审查与风险识别平台",
-      contextValue: 78,
-      time: "5月19日 16:45",
-      iconBg: "bg-blue-50 text-blue-600",
-      icon: MessageSquareText,
-    },
-    {
-      title: "客服质检优化平台",
-      tag: "产品优化",
-      tagColor: "text-purple-600 bg-purple-50",
-      desc: "基于大模型的客服对话质检与洞察平台",
-      contextValue: 64,
-      time: "5月19日 09:15",
-      iconBg: "bg-purple-50 text-purple-600",
-      icon: Headphones,
-    },
-  ];
+interface ProjectDisplay {
+  title: string;
+  tag: string;
+  tagColor: string;
+  desc: string;
+  contextValue: number;
+  time: string;
+  iconBg: string;
+  icon: LucideIcon;
+}
+
+function mapProjectToDisplay(p: Project): ProjectDisplay {
+  const tag = p.tags?.[0] ?? "项目";
+  const icons: Record<string, LucideIcon> = {
+    需求澄清: MessageSquareText,
+    方案评审: Briefcase,
+    产品优化: Headphones,
+    架构评审: Briefcase,
+  };
+  return {
+    title: p.name,
+    tag,
+    tagColor: "text-teal-600 bg-teal-50",
+    desc: p.description ?? "",
+    contextValue: p.completeness ?? 0,
+    time: formatTime(p.updated_at),
+    iconBg: "bg-teal-50 text-teal-600",
+    icon: icons[tag] ?? Briefcase,
+  };
+}
+
+function formatTime(iso: string): string {
+  try {
+    const d = new Date(iso);
+    return `${d.getMonth() + 1}月${d.getDate()}日 ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  } catch {
+    return iso;
+  }
+}
+
+interface RecentProjectsProps {
+  projects?: Project[];
+}
+
+export function RecentProjects({ projects: externalProjects }: RecentProjectsProps) {
+  const allProjects = externalProjects ?? [];
+  const displayProjects = allProjects
+    .slice()
+    .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
+    .slice(0, 3)
+    .map(mapProjectToDisplay);
+
+  if (displayProjects.length === 0) {
+    return (
+      <div className="w-full">
+        <div className="flex items-center justify-between mb-4 px-2">
+          <div className="flex items-center gap-2">
+            <Folder className="w-5 h-5 text-slate-400" />
+            <h2 className="text-base font-semibold text-slate-900">最近项目</h2>
+          </div>
+        </div>
+        <div className="bg-white rounded-[20px] border border-slate-100 shadow-sm p-8 text-center text-slate-400 text-sm">
+          暂无项目数据，请先创建项目
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="w-full">
@@ -49,7 +84,7 @@ export function RecentProjects() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {projects.map((p, idx) => (
+        {displayProjects.map((p, idx) => (
           <div
             key={idx}
             className="bg-white rounded-[20px] p-5 border border-slate-100 shadow-sm flex flex-col justify-between hover:shadow-md transition-shadow cursor-pointer group"

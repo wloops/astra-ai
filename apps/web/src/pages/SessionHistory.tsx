@@ -1,12 +1,12 @@
-import React, { useState } from 'react';
-import { Navbar } from '../components/dashboard/Navbar';
-import { 
-  RefreshCcw, 
-  Download, 
-  ChevronDown, 
-  Calendar, 
-  Search, 
-  ChevronRight, 
+import React, { useEffect, useState } from "react";
+import { Navbar } from "../components/dashboard/Navbar";
+import {
+  RefreshCcw,
+  Download,
+  ChevronDown,
+  Calendar,
+  Search,
+  ChevronRight,
   ChevronLeft,
   CheckCircle2,
   AlertCircle,
@@ -16,116 +16,134 @@ import {
   MoreHorizontal,
   Bot,
   User,
-  Users
-} from 'lucide-react';
-import { cn } from '../lib/utils';
-
-// --- Mock Data ---
-const mockList = [
-  {
-    id: 'MTG-2024-0515-0012',
-    title: '智能文档处理流程优化研讨',
-    project: '企业极速差旅报销系统',
-    scenario: '需求澄清',
-    time: '2024-05-15 14:30',
-    duration: '45 分钟',
-    conclusion: '已达共识',
-    status: '已完成'
-  },
-  {
-    id: 'MTG-2024-0514-0008',
-    title: 'OCR 引擎选型与评估',
-    project: '智能文档处理平台',
-    scenario: '技术方案评估',
-    time: '2024-05-14 10:15',
-    duration: '60 分钟',
-    conclusion: '部分共识',
-    status: '已完成'
-  },
-  {
-    id: 'MTG-2024-0512-0005',
-    title: '权限模型与数据安全方案评审',
-    project: '数据中台权限系统',
-    scenario: '方案设计评审',
-    time: '2024-05-12 16:00',
-    duration: '55 分钟',
-    conclusion: '存在分歧',
-    status: '已完成'
-  },
-  {
-    id: 'MTG-2024-0510-0011',
-    title: '发票信息结构化抽取规则研讨',
-    project: '智能文档处理平台',
-    scenario: '规则设计',
-    time: '2024-05-10 11:20',
-    duration: '40 分钟',
-    conclusion: '已达共识',
-    status: '已完成'
-  },
-  {
-    id: 'MTG-2024-0509-0009',
-    title: '报销审批流程与风控策略对齐',
-    project: '企业极速差旅报销系统',
-    scenario: '流程与风控',
-    time: '2024-05-09 09:45',
-    duration: '50 分钟',
-    conclusion: '部分共识',
-    status: '已完成'
-  },
-  {
-    id: 'MTG-2024-0508-0007',
-    title: '多模态票据识别能力可行性验证',
-    project: '智能文档处理平台',
-    scenario: '需求探索',
-    time: '2024-05-08 15:30',
-    duration: '35 分钟',
-    conclusion: '待定',
-    status: '已完成'
-  },
-  {
-    id: 'MTG-2024-0507-0004',
-    title: '费用分类标准与科目映射讨论',
-    project: '企业极速差旅报销系统',
-    scenario: '业务规则梳理',
-    time: '2024-05-07 10:00',
-    duration: '45 分钟',
-    conclusion: '已达共识',
-    status: '已完成'
-  }
-];
+  Users,
+} from "lucide-react";
+import { cn } from "../lib/utils";
+import { apiClient } from "../api/client";
+import type { DiscussionSession, Project, ScenarioTemplate, SessionResult } from "../api/types";
 
 // --- Helpers ---
-const getConclusionBadgeClass = (status: string) => {
-  switch (status) {
-    case '已达共识': return 'text-emerald-600 bg-emerald-50 border-emerald-100';
-    case '部分共识': return 'text-amber-600 bg-amber-50 border-amber-100';
-    case '存在分歧': return 'text-rose-600 bg-rose-50 border-rose-100';
-    case '待定': return 'text-slate-500 bg-slate-100 border-slate-200';
-    default: return 'text-slate-500 bg-slate-100 border-slate-200';
-  }
+const STATUS_LABELS: Record<string, string> = {
+  pending: "待开始",
+  running: "进行中",
+  completed: "已完成",
+  failed: "失败",
+  paused: "已暂停",
 };
 
-const getStatusBadge = (status: string) => {
+function formatTime(iso: string): string {
+  try {
+    const d = new Date(iso);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  } catch {
+    return iso;
+  }
+}
+
+function getStatusBadge(status: string) {
+  const label = STATUS_LABELS[status] ?? status;
+  const colorMap: Record<string, string> = {
+    completed: "bg-emerald-500",
+    running: "bg-blue-500",
+    failed: "bg-rose-500",
+    pending: "bg-slate-400",
+    paused: "bg-amber-500",
+  };
+  const dotColor = colorMap[status] ?? "bg-slate-400";
   return (
     <div className="flex items-center gap-1.5 text-slate-600">
-      <div className="w-1.5 h-1.5 rounded-full bg-emerald-500"></div>
-      <span className="text-sm">{status}</span>
+      <div className={cn("w-1.5 h-1.5 rounded-full", dotColor)}></div>
+      <span className="text-sm">{label}</span>
     </div>
   );
-};
-
+}
 
 export function SessionHistory() {
-  const [activeId, setActiveId] = useState(mockList[0].id);
+  const [sessions, setSessions] = useState<DiscussionSession[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [scenarios, setScenarios] = useState<ScenarioTemplate[]>([]);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [sessionResult, setSessionResult] = useState<SessionResult | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  const activeItem = mockList.find(item => item.id === activeId) || mockList[0];
+  // 搜索/过滤
+  const [searchQuery, setSearchQuery] = useState("");
+  const [filterProjectId, setFilterProjectId] = useState("");
+  const [filterScenarioId, setFilterScenarioId] = useState("");
+
+  useEffect(() => {
+    async function loadData() {
+      try {
+        const [s, p, sc] = await Promise.all([
+          apiClient.listSessions(),
+          apiClient.listProjects(),
+          apiClient.listScenarioTemplates(),
+        ]);
+        setSessions(s);
+        setProjects(p);
+        setScenarios(sc);
+        if (s.length > 0) setActiveId(s[0].id);
+      } catch {
+        // 保持空数组
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadData();
+  }, []);
+
+  // 当 activeId 变化时加载结果
+  useEffect(() => {
+    if (!activeId) {
+      setSessionResult(null);
+      return;
+    }
+    apiClient
+      .getSessionResult(activeId)
+      .then(setSessionResult)
+      .catch(() => setSessionResult(null));
+  }, [activeId]);
+
+  const activeSession = sessions.find((s) => s.id === activeId) ?? null;
+
+  const getProjectName = (projectId: string) => {
+    const p = projects.find((x) => x.id === projectId);
+    return p?.name ?? projectId;
+  };
+
+  const getScenarioName = (scenarioId: string) => {
+    const sc = scenarios.find((x) => x.id === scenarioId);
+    return sc?.name ?? scenarioId;
+  };
+
+  // 搜索/过滤后的 sessions
+  const filteredSessions = sessions.filter((s) => {
+    if (searchQuery && !s.topic.includes(searchQuery)) return false;
+    if (filterProjectId && s.project_id !== filterProjectId) return false;
+    if (filterScenarioId && s.scenario_id !== filterScenarioId) return false;
+    return true;
+  });
+
+  // 过滤变化时重置到第一页
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, filterProjectId, filterScenarioId]);
+
+  // 前端分页
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 10;
+  const totalPages = Math.max(1, Math.ceil(filteredSessions.length / pageSize));
+  const pagedSessions = filteredSessions.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+
+  const handleRefresh = () => {
+    apiClient.listSessions().then(setSessions);
+  };
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] flex flex-col font-sans">
       <Navbar activePage="会议历史" />
 
       <main className="flex-1 w-full max-w-[1600px] mx-auto p-6 md:p-8 flex flex-col gap-6">
-        
         {/* Header Section */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
@@ -133,7 +151,10 @@ export function SessionHistory() {
             <p className="text-sm text-slate-500">查看和管理所有发起的高质量多 Agent 研讨会议</p>
           </div>
           <div className="flex items-center gap-3">
-            <button className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors shadow-sm">
+            <button
+              onClick={handleRefresh}
+              className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors shadow-sm"
+            >
               <RefreshCcw className="w-4 h-4" />
               <span>刷新</span>
             </button>
@@ -146,354 +167,281 @@ export function SessionHistory() {
 
         {/* Filters Section */}
         <div className="flex flex-wrap lg:flex-nowrap items-end gap-4 w-full">
-          <div className="flex flex-col gap-1.5 w-full sm:w-[calc(50%-8px)] lg:w-48 xl:w-56 flex-shrink-0">
+          <div className="flex flex-col gap-1.5 w-full sm:w-[calc(50%-8px)] lg:w-44 xl:w-48 flex-shrink-0">
             <label className="text-xs font-medium text-slate-600">项目</label>
             <div className="relative">
-              <select className="w-full h-10 px-3 pr-10 appearance-none bg-white border border-slate-200 rounded-lg text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm transition-all hover:border-slate-300">
-                <option>全部项目</option>
+              <select
+                value={filterProjectId}
+                onChange={(e) => setFilterProjectId(e.target.value)}
+                className="w-full h-10 px-3 pr-10 appearance-none bg-white border border-slate-200 rounded-lg text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm transition-all hover:border-slate-300"
+              >
+                <option value="">全部项目</option>
+                {projects.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
               </select>
               <ChevronDown className="w-4 h-4 text-slate-400 absolute right-3 top-3 pointer-events-none" />
             </div>
           </div>
-          <div className="flex flex-col gap-1.5 w-full sm:w-[calc(50%-8px)] lg:w-48 xl:w-56 flex-shrink-0">
+          <div className="flex flex-col gap-1.5 w-full sm:w-[calc(50%-8px)] lg:w-44 xl:w-48 flex-shrink-0">
             <label className="text-xs font-medium text-slate-600">场景</label>
             <div className="relative">
-              <select className="w-full h-10 px-3 pr-10 appearance-none bg-white border border-slate-200 rounded-lg text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm transition-all hover:border-slate-300">
-                <option>全部场景</option>
+              <select
+                value={filterScenarioId}
+                onChange={(e) => setFilterScenarioId(e.target.value)}
+                className="w-full h-10 px-3 pr-10 appearance-none bg-white border border-slate-200 rounded-lg text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm transition-all hover:border-slate-300"
+              >
+                <option value="">全部场景</option>
+                {scenarios.map((sc) => (
+                  <option key={sc.id} value={sc.id}>{sc.name}</option>
+                ))}
               </select>
               <ChevronDown className="w-4 h-4 text-slate-400 absolute right-3 top-3 pointer-events-none" />
             </div>
           </div>
-          <div className="flex flex-col gap-1.5 w-full lg:w-72 xl:w-80 flex-shrink-0">
-            <label className="text-xs font-medium text-slate-600">日期范围</label>
-            <div className="flex items-center shadow-sm rounded-lg hover:border-slate-300 transition-all border border-slate-200 bg-white">
-              <input type="text" placeholder="开始日期" className="w-full h-9 px-3 bg-transparent text-sm text-slate-700 focus:outline-none placeholder:text-slate-400" />
-              <div className="h-9 flex items-center justify-center text-slate-300 px-1">
-                →
-              </div>
-              <div className="relative flex-1 flex items-center">
-                <input type="text" placeholder="结束日期" className="w-full h-9 px-3 pr-8 bg-transparent text-sm text-slate-700 focus:outline-none placeholder:text-slate-400" />
-                <Calendar className="w-4 h-4 text-slate-400 absolute right-3 pointer-events-none" />
-              </div>
-            </div>
-          </div>
-          <div className="flex flex-col gap-1.5 w-full sm:w-[calc(50%-8px)] lg:w-40 xl:w-48 flex-shrink-0">
-            <label className="text-xs font-medium text-slate-600">结论状态</label>
-            <div className="relative">
-              <select className="w-full h-10 px-3 pr-10 appearance-none bg-white border border-slate-200 rounded-lg text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm transition-all hover:border-slate-300">
-                <option>全部状态</option>
-              </select>
-              <ChevronDown className="w-4 h-4 text-slate-400 absolute right-3 top-3 pointer-events-none" />
-            </div>
-          </div>
-          <div className="flex flex-col gap-1.5 w-full sm:w-[calc(50%-8px)] lg:w-40 xl:w-48 flex-shrink-0">
-            <label className="text-xs font-medium text-slate-600">状态</label>
-            <div className="relative">
-              <select className="w-full h-10 px-3 pr-10 appearance-none bg-white border border-slate-200 rounded-lg text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm transition-all hover:border-slate-300">
-                <option>全部状态</option>
-              </select>
-              <ChevronDown className="w-4 h-4 text-slate-400 absolute right-3 top-3 pointer-events-none" />
-            </div>
-          </div>
-          <div className="w-full lg:flex-1 lg:ml-auto">
+          <div className="flex flex-col gap-1.5 w-full lg:flex-1 lg:ml-auto">
+            <label className="text-xs font-medium text-slate-600">&nbsp;</label>
             <div className="relative">
               <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
-              <input type="text" placeholder="搜索会议标题或关键词" className="w-full h-10 pl-9 pr-4 bg-white border border-slate-200 rounded-lg text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm transition-all hover:border-slate-300 placeholder:text-slate-400" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="搜索会议标题或关键词"
+                className="w-full h-10 pl-9 pr-4 bg-white border border-slate-200 rounded-lg text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm transition-all hover:border-slate-300 placeholder:text-slate-400"
+              />
             </div>
           </div>
         </div>
 
-        {/* Main Content Area: Left List + Right Detail */}
+        {/* Main Content */}
         <div className="flex flex-col xl:flex-row gap-6 min-h-[600px]">
           {/* Left List */}
           <div className="flex-1 bg-white border border-slate-200 rounded-xl shadow-sm flex flex-col overflow-hidden">
-             <div className="overflow-x-auto">
-               <table className="w-full text-left border-collapse whitespace-nowrap">
-                 <thead>
-                   <tr className="border-b border-slate-100 text-sm font-medium text-slate-600 bg-white">
-                     <th className="py-4 pl-6 pr-4 font-semibold w-[28%]">会议标题</th>
-                     <th className="py-4 px-4 font-semibold w-[15%]">项目</th>
-                     <th className="py-4 px-4 font-semibold w-[15%]">场景</th>
-                     <th className="py-4 px-4 font-semibold w-[15%]">时间</th>
-                     <th className="py-4 px-4 font-semibold w-[12%]">参与角色</th>
-                     <th className="py-4 px-4 font-semibold w-[10%]">结论状态</th>
-                     <th className="py-4 px-4 font-semibold w-[5%] text-right pr-6">状态</th>
-                   </tr>
-                 </thead>
-                 <tbody className="text-sm">
-                   {mockList.map((item, idx) => {
-                     const isActive = item.id === activeId;
-                     return (
-                       <tr 
-                         key={item.id} 
-                         onClick={() => setActiveId(item.id)}
-                         className={cn(
-                           "border-b border-slate-100 last:border-none cursor-pointer transition-colors group relative",
-                           isActive ? "bg-blue-50/50" : "hover:bg-slate-50"
-                         )}
-                       >
-                         {/* Active left border indicator marker */}
-                         <td className="py-4 pl-6 pr-4 relative w-[28%]">
-                           {isActive && (
-                             <div className="absolute left-0 top-0 bottom-0 w-[3px] bg-blue-500 z-10" />
-                           )}
-                           <div className="flex flex-col gap-1">
-                             <span className={cn("font-medium", isActive ? "text-blue-700" : "text-slate-900 group-hover:text-blue-600")}>
-                               {item.title}
-                             </span>
-                             <span className="text-xs text-slate-400">ID: {item.id}</span>
-                           </div>
-                         </td>
-                         <td className="py-4 px-4 text-slate-600 w-[15%]">
-                           <div className="w-full truncate">{item.project}</div>
-                         </td>
-                         <td className="py-4 px-4 text-slate-600 w-[15%]">
-                           <div className="w-full truncate">{item.scenario}</div>
-                         </td>
-                         <td className="py-4 px-4 text-slate-600 w-[15%]">
-                           <div className="flex flex-col gap-0.5">
-                             <span>{item.time.split(' ')[0]} {item.time.split(' ')[1]}</span>
-                             <span className="text-xs text-slate-400">({item.duration})</span>
-                           </div>
-                         </td>
-                         <td className="py-4 px-4 w-[12%]">
-                           <div className="flex items-center -space-x-1.5">
-                             {/* Mock Avatars */}
-                             <div className="w-6 h-6 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 border border-white z-30">
-                               <Bot className="w-3.5 h-3.5" />
-                             </div>
-                             <div className="w-6 h-6 rounded-full border border-white z-20 overflow-hidden">
-                               <img src="https://api.dicebear.com/7.x/notionists/svg?seed=Felix&backgroundColor=e2e8f0" alt="avatar" />
-                             </div>
-                             <div className="w-6 h-6 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 border border-white z-10">
-                               <span className="text-[10px] font-bold">★</span>
-                             </div>
-                             <div className="w-6 h-6 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 border border-white text-[10px] font-medium pl-1">
-                               +2
-                             </div>
-                           </div>
-                         </td>
-                         <td className="py-4 px-4">
-                           <span className={cn(
-                             "inline-flex items-center px-2 py-0.5 rounded border text-xs font-medium",
-                             getConclusionBadgeClass(item.conclusion)
-                           )}>
-                             {item.conclusion}
-                           </span>
-                         </td>
-                         <td className="py-4 pl-4 pr-6 text-right">
-                           <div className="flex items-center justify-end gap-4">
-                             {getStatusBadge(item.status)}
-                             <ChevronRight className={cn(
-                               "w-4 h-4 transition-colors", 
-                               isActive ? "text-blue-500" : "text-slate-300 group-hover:text-slate-500"
-                             )} />
-                           </div>
-                         </td>
-                       </tr>
-                     );
-                   })}
-                 </tbody>
-               </table>
-             </div>
-             
-             {/* Pagination */}
-             <div className="mt-auto p-4 border-t border-slate-100 flex items-center justify-between text-sm text-slate-500">
-               <div>共 <span className="font-medium text-slate-900">27</span> 条</div>
-               <div className="flex items-center gap-4">
-                 <div className="flex items-center gap-1">
-                   <button className="w-8 h-8 flex items-center justify-center rounded text-slate-400 hover:text-slate-700 hover:bg-slate-50 disabled:opacity-50">
-                     <ChevronLeft className="w-4 h-4" />
-                   </button>
-                   <button className="w-8 h-8 flex items-center justify-center rounded bg-blue-50 text-blue-600 font-medium">
-                     1
-                   </button>
-                   <button className="w-8 h-8 flex items-center justify-center rounded hover:bg-slate-50 text-slate-700">
-                     2
-                   </button>
-                   <button className="w-8 h-8 flex items-center justify-center rounded hover:bg-slate-50 text-slate-700">
-                     3
-                   </button>
-                   <button className="w-8 h-8 flex items-center justify-center rounded text-slate-400 hover:text-slate-700 hover:bg-slate-50 disabled:opacity-50">
-                     <ChevronRight className="w-4 h-4" />
-                   </button>
-                 </div>
-                 <div className="relative">
-                   <select className="appearance-none bg-white border border-slate-200 rounded py-1 pl-3 pr-8 text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500 shadow-sm cursor-pointer">
-                     <option>10 条/页</option>
-                     <option>20 条/页</option>
-                     <option>50 条/页</option>
-                   </select>
-                   <ChevronDown className="w-4 h-4 text-slate-400 absolute right-2 top-1.5 pointer-events-none" />
-                 </div>
-               </div>
-             </div>
+            {loading ? (
+              <div className="flex-1 flex items-center justify-center text-slate-400 text-sm">加载中…</div>
+            ) : pagedSessions.length === 0 ? (
+              <div className="flex-1 flex items-center justify-center text-slate-400 text-sm">暂无会议记录，请先发起研讨</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse whitespace-nowrap">
+                  <thead>
+                    <tr className="border-b border-slate-100 text-sm font-medium text-slate-600 bg-white">
+                      <th className="py-4 pl-6 pr-4 font-semibold w-[25%]">会议标题</th>
+                      <th className="py-4 px-4 font-semibold w-[15%]">项目</th>
+                      <th className="py-4 px-4 font-semibold w-[12%]">场景</th>
+                      <th className="py-4 px-4 font-semibold w-[18%]">时间</th>
+                      <th className="py-4 px-4 font-semibold w-[10%]">状态</th>
+                      <th className="py-4 px-4 font-semibold w-[5%] text-right pr-6"></th>
+                    </tr>
+                  </thead>
+                  <tbody className="text-sm">
+                    {pagedSessions.map((s) => {
+                      const isActive = s.id === activeId;
+                      return (
+                        <tr
+                          key={s.id}
+                          onClick={() => setActiveId(s.id)}
+                          className={cn(
+                            "border-b border-slate-100 last:border-none cursor-pointer transition-colors group relative",
+                            isActive ? "bg-blue-50/50" : "hover:bg-slate-50",
+                          )}
+                        >
+                          <td className="py-4 pl-6 pr-4 relative">
+                            {isActive && <div className="absolute left-0 top-0 bottom-0 w-[3px] bg-blue-500 z-10" />}
+                            <div className="flex flex-col gap-1">
+                              <span className={cn("font-medium", isActive ? "text-blue-700" : "text-slate-900 group-hover:text-blue-600")}>
+                                {s.topic}
+                              </span>
+                              <span className="text-xs text-slate-400">ID: {s.id}</span>
+                            </div>
+                          </td>
+                          <td className="py-4 px-4 text-slate-600">
+                            <div className="w-full truncate">{getProjectName(s.project_id)}</div>
+                          </td>
+                          <td className="py-4 px-4 text-slate-600">
+                            <div className="w-full truncate">{getScenarioName(s.scenario_id)}</div>
+                          </td>
+                          <td className="py-4 px-4 text-slate-600">
+                            <div className="flex flex-col gap-0.5">
+                              <span>{formatTime(s.created_at)}</span>
+                            </div>
+                          </td>
+                          <td className="py-4 px-4">{getStatusBadge(s.status)}</td>
+                          <td className="py-4 pl-4 pr-6 text-right">
+                            <ChevronRight
+                              className={cn("w-4 h-4 transition-colors", isActive ? "text-blue-500" : "text-slate-300 group-hover:text-slate-500")}
+                            />
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Pagination */}
+            {filteredSessions.length > 0 && (
+              <div className="mt-auto p-4 border-t border-slate-100 flex items-center justify-between text-sm text-slate-500">
+                <div>
+                  共 <span className="font-medium text-slate-900">{filteredSessions.length}</span> 条{sessions.length !== filteredSessions.length ? <span className="text-xs text-slate-400 ml-1">（全部 {sessions.length}）</span> : null}
+                </div>
+                <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                      className="w-8 h-8 flex items-center justify-center rounded text-slate-400 hover:text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                      disabled={currentPage <= 1}
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                    </button>
+                    <button className="w-8 h-8 flex items-center justify-center rounded bg-blue-50 text-blue-600 font-medium">
+                      {currentPage}
+                    </button>
+                    <button
+                      onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                      className="w-8 h-8 flex items-center justify-center rounded text-slate-400 hover:text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                      disabled={currentPage >= totalPages}
+                    >
+                      <ChevronRight className="w-4 h-4" />
+                    </button>
+                  </div>
+                  <div className="relative">
+                    <select
+                      value={pageSize}
+                      onChange={(e) => {
+                        setCurrentPage(1);
+                      }}
+                      className="appearance-none bg-white border border-slate-200 rounded py-1 pl-3 pr-8 text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500 shadow-sm cursor-pointer"
+                    >
+                      <option value={10}>10 条/页</option>
+                      <option value={20}>20 条/页</option>
+                      <option value={50}>50 条/页</option>
+                    </select>
+                    <ChevronDown className="w-4 h-4 text-slate-400 absolute right-2 top-1.5 pointer-events-none" />
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Right Detail */}
           <div className="w-full xl:w-[480px] bg-white border border-slate-200 rounded-xl shadow-sm flex flex-col h-full flex-shrink-0">
-             <div className="flex-1 p-6 overflow-y-auto">
-               
-               {/* Header */}
-               <div className="flex items-start gap-3 mb-6">
-                 <span className="inline-flex items-center px-2 py-1 rounded bg-blue-50 text-blue-600 text-xs font-medium whitespace-nowrap mt-0.5">
-                   {activeItem.status}
-                 </span>
-                 <h2 className="text-xl font-bold text-slate-900 leading-tight">
-                   {activeItem.title}
-                 </h2>
-               </div>
+            {!activeSession ? (
+              <div className="flex-1 flex items-center justify-center text-slate-400 text-sm p-6">请选择一条会议记录</div>
+            ) : (
+              <>
+                <div className="flex-1 p-6 overflow-y-auto">
+                  {/* Header */}
+                  <div className="flex items-start gap-3 mb-6">
+                    <span className="inline-flex items-center px-2 py-1 rounded bg-blue-50 text-blue-600 text-xs font-medium whitespace-nowrap mt-0.5">
+                      {STATUS_LABELS[activeSession.status] ?? activeSession.status}
+                    </span>
+                    <h2 className="text-xl font-bold text-slate-900 leading-tight">{activeSession.topic}</h2>
+                  </div>
 
-               {/* Meta info */}
-               <div className="grid grid-cols-2 gap-4 mb-8">
-                 <div>
-                   <div className="text-xs text-slate-500 mb-1">会议时间</div>
-                   <div className="text-sm text-slate-700">
-                     {activeItem.time} - {parseInt(activeItem.time.split(' ')[1].split(':')[0]) + Math.floor((parseInt(activeItem.time.split(' ')[1].split(':')[1]) + parseInt(activeItem.duration))/60)}:{((parseInt(activeItem.time.split(' ')[1].split(':')[1]) + parseInt(activeItem.duration))%60).toString().padStart(2, '0')} ({activeItem.duration})
-                   </div>
-                 </div>
-                 <div>
-                   <div className="text-xs text-slate-500 mb-1">会议 ID</div>
-                   <div className="text-sm text-slate-700">{activeItem.id}</div>
-                 </div>
-               </div>
+                  {/* Meta info */}
+                  <div className="grid grid-cols-2 gap-4 mb-8">
+                    <div>
+                      <div className="text-xs text-slate-500 mb-1">项目</div>
+                      <div className="text-sm text-slate-700">{getProjectName(activeSession.project_id)}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-slate-500 mb-1">场景</div>
+                      <div className="text-sm text-slate-700">{getScenarioName(activeSession.scenario_id)}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-slate-500 mb-1">创建时间</div>
+                      <div className="text-sm text-slate-700">{formatTime(activeSession.created_at)}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-slate-500 mb-1">会议 ID</div>
+                      <div className="text-sm text-slate-700">{activeSession.id}</div>
+                    </div>
+                  </div>
 
-               {/* Sections */}
-               <div className="space-y-6">
-                 
-                 <section>
-                   <h3 className="text-[15px] font-bold text-slate-900 mb-2">会议摘要</h3>
-                   <p className="text-sm text-slate-600 leading-relaxed">
-                     围绕智能文档处理从上传到归档的全流程进行研讨，聚焦 OCR 识别、信息提取、校验、分类、归档等关键环节的优化方案与实施优先级。
-                   </p>
-                 </section>
+                  {/* Result Sections */}
+                  {sessionResult ? (
+                    <div className="space-y-6">
+                      {sessionResult.final_conclusion && (
+                        <section>
+                          <h3 className="text-[15px] font-bold text-slate-900 mb-2">会议摘要</h3>
+                          <p className="text-sm text-slate-600 leading-relaxed">{sessionResult.final_conclusion}</p>
+                        </section>
+                      )}
 
-                 <section>
-                   <h3 className="text-[15px] font-bold text-slate-900 mb-2">关键结论</h3>
-                   <ul className="space-y-2">
-                     <li className="flex items-start gap-2 text-sm text-slate-600">
-                       <CheckCircle2 className="w-4 h-4 text-emerald-500 mt-0.5 shrink-0" />
-                       <span>确定采用分阶段优化策略，优先提升 OCR 准确率与抽取召回率。</span>
-                     </li>
-                     <li className="flex items-start gap-2 text-sm text-slate-600">
-                       <CheckCircle2 className="w-4 h-4 text-emerald-500 mt-0.5 shrink-0" />
-                       <span>建立统一的字段标准与校验规则，减少人工复核成本。</span>
-                     </li>
-                     <li className="flex items-start gap-2 text-sm text-slate-600">
-                       <CheckCircle2 className="w-4 h-4 text-emerald-500 mt-0.5 shrink-0" />
-                       <span>引入置信度分级机制，优化异常文档处理流程。</span>
-                     </li>
-                   </ul>
-                 </section>
+                      {sessionResult.key_conflicts && sessionResult.key_conflicts.length > 0 && (
+                        <section>
+                          <h3 className="text-[15px] font-bold text-slate-900 mb-2">关键争议</h3>
+                          <ul className="space-y-2">
+                            {sessionResult.key_conflicts.map((c, i) => (
+                              <li key={i} className="flex items-start gap-2 text-sm text-slate-600">
+                                <AlertCircle className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
+                                <span>
+                                  {(c as Record<string, unknown>).title ?? `争议 ${i + 1}`}: {(c as Record<string, unknown>).judgement ?? JSON.stringify(c)}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                        </section>
+                      )}
 
-                 <section>
-                   <h3 className="text-[15px] font-bold text-slate-900 mb-2">主要分歧</h3>
-                   <ul className="space-y-2">
-                     <li className="flex items-start gap-2 text-sm text-slate-600">
-                       <div className="w-1.5 h-1.5 rounded-full bg-orange-400 mt-1.5 shrink-0" />
-                       <span>是否在第一阶段引入多模态大模型做端到端抽取 (支持：产品经理；反对：后端架构师)</span>
-                     </li>
-                     <li className="flex items-start gap-2 text-sm text-slate-600">
-                       <div className="w-1.5 h-1.5 rounded-full bg-orange-400 mt-1.5 shrink-0" />
-                       <span>异常文档的人工复核阈值设定 (0.6 vs 0.75)</span>
-                     </li>
-                   </ul>
-                 </section>
+                      {sessionResult.risks && sessionResult.risks.length > 0 && (
+                        <section>
+                          <h3 className="text-[15px] font-bold text-slate-900 mb-2">风险</h3>
+                          <ul className="space-y-2">
+                            {sessionResult.risks.map((r, i) => (
+                              <li key={i} className="flex items-start gap-2 text-sm text-slate-600">
+                                <div className="w-1.5 h-1.5 rounded-full bg-orange-400 mt-1.5 shrink-0" />
+                                <span>{(r as Record<string, unknown>).name ?? JSON.stringify(r)}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </section>
+                      )}
 
-                 <section>
-                   <h3 className="text-[15px] font-bold text-slate-900 mb-3">参与角色</h3>
-                   <div className="grid grid-cols-2 gap-3">
-                     
-                     <div className="flex items-center gap-3 p-2.5 rounded-lg border border-slate-100 bg-slate-50/50">
-                       <div className="w-8 h-8 rounded bg-blue-100 flex items-center justify-center text-blue-600 shrink-0">
-                         <Bot className="w-4 h-4" />
-                       </div>
-                       <div className="flex flex-col overflow-hidden">
-                         <span className="text-sm font-medium text-slate-900 truncate">AI 主持人</span>
-                         <span className="text-[10px] text-slate-500 truncate">会议组织与节奏把控</span>
-                       </div>
-                     </div>
+                      {sessionResult.actions && sessionResult.actions.length > 0 && (
+                        <section>
+                          <h3 className="text-[15px] font-bold text-slate-900 mb-2">行动项</h3>
+                          <ul className="space-y-2">
+                            {sessionResult.actions.map((a, i) => (
+                              <li key={i} className="flex items-start gap-2 text-sm text-slate-600">
+                                <CheckCircle2 className="w-4 h-4 text-emerald-500 mt-0.5 shrink-0" />
+                                <span>{(a as Record<string, unknown>).title ?? JSON.stringify(a)}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </section>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-sm text-slate-400 text-center py-8">暂无结果数据（Session 可能仍在进行中）</div>
+                  )}
+                </div>
 
-                     <div className="flex items-center gap-3 p-2.5 rounded-lg border border-slate-100 bg-slate-50/50">
-                       <div className="w-8 h-8 rounded bg-sky-100 flex items-center justify-center text-sky-600 shrink-0">
-                         <User className="w-4 h-4" />
-                       </div>
-                       <div className="flex flex-col overflow-hidden">
-                         <span className="text-sm font-medium text-slate-900 truncate">产品经理</span>
-                         <span className="text-[10px] text-slate-500 truncate">需求与优先级评估</span>
-                       </div>
-                     </div>
-
-                     <div className="flex items-center gap-3 p-2.5 rounded-lg border border-slate-100 bg-slate-50/50">
-                       <div className="w-8 h-8 rounded bg-indigo-100 flex items-center justify-center text-indigo-600 shrink-0">
-                         <div className="font-bold text-xs">{"</>"}</div>
-                       </div>
-                       <div className="flex flex-col overflow-hidden">
-                         <span className="text-sm font-medium text-slate-900 truncate">后端架构师</span>
-                         <span className="text-[10px] text-slate-500 truncate">方案与成本评估</span>
-                       </div>
-                     </div>
-
-                     <div className="flex items-center gap-3 p-2.5 rounded-lg border border-slate-100 bg-slate-50/50">
-                       <div className="w-8 h-8 rounded bg-purple-100 flex items-center justify-center text-purple-600 shrink-0">
-                         <div className="w-4 h-4 flex items-center justify-center border-2 border-current rounded-[4px]"><div className="w-1.5 h-1.5 bg-current rounded-sm"></div></div>
-                       </div>
-                       <div className="flex flex-col overflow-hidden">
-                         <span className="text-sm font-medium text-slate-900 truncate">测试工程师</span>
-                         <span className="text-[10px] text-slate-500 truncate">质量与测试策略</span>
-                       </div>
-                     </div>
-
-                     <div className="flex items-center gap-3 p-2.5 rounded-lg border border-slate-100 bg-slate-50/50">
-                       <div className="w-8 h-8 rounded bg-blue-50 flex items-center justify-center text-blue-500 shrink-0">
-                         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                           <path strokeLinecap="round" strokeLinejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-                         </svg>
-                       </div>
-                       <div className="flex flex-col overflow-hidden">
-                         <span className="text-sm font-medium text-slate-900 truncate">数据分析师</span>
-                         <span className="text-[10px] text-slate-500 truncate">数据指标与评估</span>
-                       </div>
-                     </div>
-
-                     <div className="flex items-center gap-3 p-2.5 rounded-lg border border-slate-100 bg-slate-50/50">
-                       <div className="w-8 h-8 rounded bg-slate-200 flex items-center justify-center text-slate-500 shrink-0">
-                         <Users className="w-4 h-4" />
-                       </div>
-                       <div className="flex flex-col overflow-hidden">
-                         <span className="text-sm font-medium text-slate-900 truncate">+2 其他参与者</span>
-                         <span className="text-[10px] text-slate-500 truncate">测试工程师、运维工程师</span>
-                       </div>
-                     </div>
-
-                   </div>
-                 </section>
-
-               </div>
-               
-             </div>
-
-             {/* Footer Actions */}
-             <div className="p-4 border-t border-slate-100 bg-slate-50/50 flex items-center justify-between rounded-b-xl gap-3">
-               <button className="flex-1 flex items-center justify-center gap-2 px-4 h-10 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 hover:text-blue-600 transition-colors shadow-sm">
-                 <FileText className="w-4 h-4 text-blue-500" />
-                 <span>查看纪要</span>
-               </button>
-               <button className="flex-1 flex items-center justify-center gap-2 px-4 h-10 bg-blue-600 rounded-lg text-sm font-medium text-white hover:bg-blue-700 transition-colors shadow-sm">
-                 <Play className="w-4 h-4 fill-white" />
-                 <span>再次发起</span>
-               </button>
-               <button className="flex-1 flex items-center justify-center px-4 h-10 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 hover:text-blue-600 transition-colors shadow-sm">
-                 <Copy className="w-4 h-4 text-blue-500 mr-2" />
-                 <span>复制配置</span>
-               </button>
-               <button className="w-10 h-10 flex border shrink-0 items-center justify-center bg-white border-slate-200 rounded-lg text-slate-500 hover:bg-slate-50 hover:text-slate-700 transition-colors shadow-sm">
-                 <MoreHorizontal className="w-4 h-4" />
-               </button>
-             </div>
+                {/* Footer Actions */}
+                <div className="p-4 border-t border-slate-100 bg-slate-50/50 flex items-center justify-between rounded-b-xl gap-3">
+                  <button className="flex-1 flex items-center justify-center gap-2 px-4 h-10 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 hover:text-blue-600 transition-colors shadow-sm">
+                    <FileText className="w-4 h-4 text-blue-500" />
+                    <span>查看纪要</span>
+                  </button>
+                  <button className="flex-1 flex items-center justify-center gap-2 px-4 h-10 bg-blue-600 rounded-lg text-sm font-medium text-white hover:bg-blue-700 transition-colors shadow-sm">
+                    <Play className="w-4 h-4 fill-white" />
+                    <span>再次发起</span>
+                  </button>
+                  <button className="flex-1 flex items-center justify-center px-4 h-10 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 hover:text-blue-600 transition-colors shadow-sm">
+                    <Copy className="w-4 h-4 text-blue-500 mr-2" />
+                    <span>复制配置</span>
+                  </button>
+                  <button className="w-10 h-10 flex border shrink-0 items-center justify-center bg-white border-slate-200 rounded-lg text-slate-500 hover:bg-slate-50 hover:text-slate-700 transition-colors shadow-sm">
+                    <MoreHorizontal className="w-4 h-4" />
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
-
       </main>
     </div>
   );
