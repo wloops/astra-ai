@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+apps/api/.venv/
+
+# Runtime data
+data/
+apps/api/data/
+api-server.log
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Frontend
+node_modules/
+dist/

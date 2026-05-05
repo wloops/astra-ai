@@ -1,0 +1,6 @@
+INFO:     Will watch for changes in these directories: ['G:\\@restflux.com\\workspace\\Open\\Astra-AI']
+INFO:     Uvicorn running on http://0.0.0.0:8010 (Press CTRL+C to quit)
+INFO:     Started reloader process [24000] using WatchFiles
+INFO:     Started server process [35676]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.

@@ -1,0 +1,104 @@
+export type SessionStatus = "pending" | "running" | "completed" | "failed" | "paused";
+
+export type SessionEventType =
+  | "session_started"
+  | "stage_started"
+  | "agent_message"
+  | "conflict_detected"
+  | "tool_event"
+  | "stage_completed"
+  | "session_completed"
+  | "session_failed";
+
+export interface Project {
+  id: string;
+  name: string;
+  description: string;
+  goal: string;
+  background: string;
+  architecture: string;
+  progress: string;
+  risks: string[];
+  constraints: string[];
+  references: Record<string, unknown>[];
+  completeness: number;
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentRole {
+  id: string;
+  name: string;
+  code: string;
+  description: string;
+  responsibilities: string[];
+  focus_areas: string[];
+  tools: string[];
+  output_style: string;
+  is_default: boolean;
+  can_debate: boolean;
+  can_use_tools: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ScenarioTemplate {
+  id: string;
+  name: string;
+  code: string;
+  description: string;
+  stages: string[];
+  default_role_codes: string[];
+  output_schema: string[];
+  recommended_tools: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SessionCreatePayload {
+  project_id: string;
+  scenario_id: string;
+  topic: string;
+  role_ids?: string[];
+  supplemental_notes?: string;
+}
+
+export interface DiscussionSession {
+  id: string;
+  project_id: string;
+  scenario_id: string;
+  topic: string;
+  role_ids: string[];
+  supplemental_notes: string;
+  status: SessionStatus;
+  current_stage: string;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+}
+
+export interface SessionEvent {
+  id: string;
+  session_id: string;
+  sequence: number;
+  type: SessionEventType;
+  stage: string | null;
+  role_code: string | null;
+  payload: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface SessionResult {
+  id: string;
+  session_id: string;
+  final_conclusion: string;
+  key_conflicts: Record<string, unknown>[];
+  role_summaries: Record<string, unknown>[];
+  risks: Record<string, unknown>[];
+  open_questions: string[];
+  actions: Record<string, unknown>[];
+  markdown_minutes: string;
+  created_at: string;
+}
