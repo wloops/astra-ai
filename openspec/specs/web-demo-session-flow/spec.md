@@ -290,6 +290,14 @@
 - **THEN** 前端 SHALL 展示预填当前值的编辑表单
 - **AND** 提交时 SHALL 调用 `PUT /projects/{id}` 更新项目
 
+### Requirement: 生产环境可访问
+
+系统 SHALL 部署到生产服务器并通过 HTTPS 对外提供服务。
+
+#### Scenario: API 域名可访问
+- **WHEN** 客户端请求 https://astra-api.wlait.com/health
+- **THEN** SHALL 返回 `{"status":"ok"}`
+
 ### Requirement: CI 自动验证
 
 项目 SHALL 具备 GitHub Actions CI 流水线，在 push 和 PR 时自动验证。

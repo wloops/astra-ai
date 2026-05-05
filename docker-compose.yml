@@ -1,0 +1,11 @@
+services:
+  api:
+    build: .
+    container_name: astra-api
+    ports:
+      - "127.0.0.1:8010:8010"
+    volumes:
+      - ./data:/app/data
+    restart: always
+    environment:
+      - ASTRA_DATABASE_URL=sqlite:///./data/astra.db
