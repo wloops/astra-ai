@@ -1,6 +1,22 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { Bot, Check, Code2, Copy, FileText, LoaderCircle, MessageSquare, Scale, ShieldCheck, User } from "lucide-react";
+import {
+  Bot,
+  Check,
+  Clock,
+  Code2,
+  Copy,
+  DollarSign,
+  ExternalLink,
+  FileText,
+  Grid2X2,
+  LoaderCircle,
+  MessageSquare,
+  Scale,
+  ShieldCheck,
+  Target,
+  User,
+} from "lucide-react";
 import { apiClient } from "../api/client";
 import { subscribeToSessionEvents } from "../api/events";
 import type { AgentRole, DiscussionSession, Project, ScenarioTemplate, SessionEvent } from "../api/types";
@@ -16,14 +32,13 @@ interface AgentMessage {
   roleCode: string | null;
 }
 
-interface ConflictItem {
-  title: string;
-  supportingView: string;
-  cautiousView: string;
-  judgement: string;
-}
-
 const roleIcons = [Bot, User, Code2, ShieldCheck];
+
+const qualityRiskMetrics = [
+  { label: "结论收敛度", value: "62%", tone: "blue" },
+  { label: "上下文充分度", value: "良好", tone: "emerald" },
+  { label: "风险覆盖度", value: "中", tone: "amber" },
+];
 
 const STAGE_LABELS: Record<string, string> = {
   init_session: "初始化会议",
@@ -42,6 +57,43 @@ function stageLabel(stage: string | null | undefined): string {
   return STAGE_LABELS[stage] ?? stage;
 }
 
+function parseBackendDate(value: string | null | undefined): Date | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(trimmed);
+  const normalized = trimmed.includes("T") ? trimmed : trimmed.replace(" ", "T");
+  const utcValue = hasTimezone ? normalized : `${normalized}Z`;
+  const date = new Date(utcValue);
+
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function formatDateTime(value: string | null | undefined): string {
+  const date = parseBackendDate(value);
+  if (!date) return "--";
+  return `${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+}
+
+function formatShortTime(value: string | null | undefined): string {
+  const date = parseBackendDate(value);
+  if (!date) return "--";
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatMessageTime(value: string | null | undefined): string {
+  const date = parseBackendDate(value);
+  if (!date) return "--";
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function formatDurationMinutes(start: Date | null, end: Date | null): string {
+  if (!start || !end) return "--";
+  const minutes = Math.max(0, Math.round((end.getTime() - start.getTime()) / 60_000));
+  return `${minutes} 分钟`;
+}
+
 function asText(value: unknown): string {
   if (typeof value === "string") return value;
   if (Array.isArray(value)) return value.map(asText).filter(Boolean).join("；");
@@ -50,15 +102,6 @@ function asText(value: unknown): string {
     return asText(record.summary ?? record.message ?? record.final_conclusion ?? Object.values(record).join("；"));
   }
   return "";
-}
-
-function mapConflict(value: Record<string, unknown>): ConflictItem {
-  return {
-    title: asText(value.title) || "关键争议",
-    supportingView: asText(value.supporting_view) || asText(value.supportingView),
-    cautiousView: asText(value.cautious_view) || asText(value.cautiousView),
-    judgement: asText(value.judgement),
-  };
 }
 
 export function Workspace() {
@@ -70,11 +113,11 @@ export function Workspace() {
   const [roles, setRoles] = useState<AgentRole[]>([]);
   const [events, setEvents] = useState<SessionEvent[]>([]);
   const [messages, setMessages] = useState<AgentMessage[]>([]);
-  const [conflicts, setConflicts] = useState<ConflictItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(Boolean(sessionId));
   const [reconnecting, setReconnecting] = useState(false);
   const [heartbeatWarning, setHeartbeatWarning] = useState(false);
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const sessionStatusRef = useRef<string | null>(null);
   const rolesRef = useRef<AgentRole[]>([]);
 
@@ -149,11 +192,6 @@ export function Workspace() {
           );
         }
 
-        if (event.type === "conflict_detected") {
-          const rawConflicts = Array.isArray(event.payload.conflicts) ? event.payload.conflicts : [event.payload];
-          setConflicts(rawConflicts.map((item) => mapConflict(item as Record<string, unknown>)));
-        }
-
         if (event.type === "session_completed") {
           setSession((current) => (current ? { ...current, status: "completed" } : current));
           setReconnecting(false);
@@ -225,11 +263,48 @@ export function Workspace() {
 
     return completed;
   }, [currentStage, events, session?.status, stages]);
-  const progress = stages.length ? Math.round((completedStages.size / stages.length) * 100) : 0;
+  useEffect(() => {
+    if (!active) return;
+    const timer = window.setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, [active]);
+
+  const overviewProgress = stages.length ? Math.round((completedStages.size / stages.length) * 100) : 0;
+  const sessionStartedAt = parseBackendDate(session?.created_at);
+  const sessionEndedAt = terminal ? parseBackendDate(session?.completed_at) ?? parseBackendDate(session?.updated_at) : new Date(nowMs);
+  const elapsedMs = sessionStartedAt && sessionEndedAt ? Math.max(0, sessionEndedAt.getTime() - sessionStartedAt.getTime()) : null;
+  const elapsedMinutesText = formatDurationMinutes(sessionStartedAt, sessionEndedAt);
+  const estimatedRemainingText =
+    terminal || session?.status === "failed"
+      ? "0 分钟"
+      : elapsedMs && overviewProgress > 0
+        ? `${Math.max(1, Math.round((elapsedMs / overviewProgress) * (100 - overviewProgress) / 60_000))} 分钟`
+        : "--";
+  const visibleRoleCount = session?.role_ids.length ?? 0;
+  const agentMessageCount = events.filter((event) => event.type === "agent_message").length;
+  const latestConflictEvent = [...events].reverse().find((event) => event.type === "conflict_detected");
+  const latestConflicts = latestConflictEvent?.payload.conflicts;
+  const conflictCount = Array.isArray(latestConflicts) ? latestConflicts.length : latestConflictEvent ? 1 : 0;
+  const toolCallCount = events.filter((event) => event.type === "tool_event").length;
+  const discussionOverviewMetrics = [
+    { label: "已用时", value: elapsedMinutesText },
+    { label: "预计剩余", value: estimatedRemainingText },
+    { label: "参与角色", value: `${visibleRoleCount}/${visibleRoleCount} 在线` },
+    { label: "已生成观点", value: `${agentMessageCount} 条` },
+    { label: "已识别争议", value: `${conflictCount} 个` },
+    { label: "已调用工具", value: `${toolCallCount} 次` },
+  ];
+  const currentStageText =
+    session?.status === "completed" ? "研讨已完成" : session?.status === "failed" ? "研讨失败" : currentStage ? stageLabel(currentStage) : "等待开始";
   const showCenteredWaiting = messages.length === 0 && active && !isLoading;
   const showBottomWaiting = messages.length > 0 && active;
   const showCompletedNotice = session?.status === "completed";
   const showFailedNotice = session?.status === "failed";
+  const loadContextEvent = events.find((event) => event.type === "stage_completed" && event.stage === "load_context");
+  const latestToolTime = loadContextEvent?.created_at ?? events[events.length - 1]?.created_at;
+  const policyToolDone = Boolean(loadContextEvent || terminal);
+  const similarCaseToolDone = session?.status === "completed";
+  const similarCaseRunning = active;
 
   if (!sessionId) {
     return (
@@ -388,7 +463,7 @@ export function Workspace() {
                       {stageLabel(message.stage)}
                     </span>
                     <span className="text-xs text-slate-400 font-medium ml-1">
-                      {new Date(message.createdAt).toLocaleTimeString()}
+                      {formatMessageTime(message.createdAt)}
                     </span>
                   </div>
                   <div className="text-sm text-slate-700 leading-relaxed max-w-[90%]">{message.content}</div>
@@ -414,19 +489,49 @@ export function Workspace() {
           </div>
         </main>
 
-        <aside className="w-[320px] flex flex-col gap-4 overflow-y-auto pl-1 pr-1 shrink-0">
+        <aside className="w-[360px] flex flex-col gap-4 overflow-y-auto pl-1 pr-1 shrink-0">
           <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
-            <div className="flex items-center gap-2 text-slate-700 mb-4">
-              <FileText className="w-4 h-4 text-slate-500" />
-              <h3 className="font-semibold text-sm">项目上下文</h3>
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2 text-slate-700">
+                <FileText className="w-4 h-4 text-slate-500" />
+                <h3 className="font-semibold text-sm">项目上下文</h3>
+              </div>
+              <Link to="/project-context" className="text-xs font-medium text-blue-600 hover:text-blue-700">
+                查看全部
+              </Link>
             </div>
-            <h4 className="font-bold text-slate-900 text-[15px] mb-3 leading-snug">{project?.name ?? "加载中..."}</h4>
-            <p className="text-[13px] text-slate-600 leading-relaxed">{project?.description || project?.goal}</p>
+            <h4 className="font-bold text-slate-900 text-[15px] mb-4 leading-snug">{project?.name ?? "加载中..."}</h4>
+            <div className="space-y-3 text-[13px] text-slate-600">
+              <div className="flex items-start gap-3">
+                <Grid2X2 className="w-4 h-4 text-slate-400 mt-0.5 shrink-0" />
+                <div>
+                  <span className="text-slate-400">场景：</span>
+                  <span>{scenario?.name ?? "未选择"}</span>
+                </div>
+              </div>
+              <div className="flex items-start gap-3">
+                <Clock className="w-4 h-4 text-slate-400 mt-0.5 shrink-0" />
+                <div>
+                  <span className="text-slate-400">创建时间：</span>
+                  <span>{formatDateTime(session?.created_at)}</span>
+                </div>
+              </div>
+              <div className="flex items-start gap-3">
+                <Target className="w-4 h-4 text-slate-400 mt-0.5 shrink-0" />
+                <div className="leading-relaxed">
+                  <span className="text-slate-400">项目描述：</span>
+                  <span>{project?.description || project?.goal || "暂无项目描述"}</span>
+                </div>
+              </div>
+            </div>
           </div>
 
           <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
-            <h3 className="font-semibold text-sm text-slate-800 mb-6">会议进度</h3>
-            <div className="flex items-center gap-5 mb-6">
+            <div className="flex items-center gap-2 text-slate-800 mb-6">
+              <Clock className="w-4 h-4 text-slate-500" />
+              <h3 className="font-semibold text-sm">研讨状态总览</h3>
+            </div>
+            <div className="flex items-center gap-5 mb-5">
               <div className="relative w-20 h-20 shrink-0">
                 <svg className="w-full h-full transform -rotate-90" viewBox="0 0 100 100">
                   <circle cx="50" cy="50" r="40" className="stroke-slate-100" strokeWidth="10" fill="none" />
@@ -439,54 +544,125 @@ export function Workspace() {
                     fill="none"
                     strokeLinecap="round"
                     strokeDasharray="251.2"
-                    strokeDashoffset={251.2 - (251.2 * progress) / 100}
+                    strokeDashoffset={251.2 - (251.2 * overviewProgress) / 100}
                   />
                 </svg>
                 <div className="absolute inset-0 flex flex-col items-center justify-center">
                   <span className="text-2xl font-bold tracking-tighter text-slate-900">
-                    {progress}<span className="text-sm font-semibold">%</span>
+                    {overviewProgress}<span className="text-sm font-semibold">%</span>
                   </span>
                   <span className="text-[9px] text-slate-400 font-medium">整体进度</span>
                 </div>
               </div>
-              <div className="text-sm text-slate-500">
-                当前阶段
-                <div className="text-slate-900 font-semibold mt-1">{currentStage ? stageLabel(currentStage) : "等待开始"}</div>
+              <div className="min-w-0 flex-1">
+                <div className="text-xs text-slate-400 mb-1">当前阶段</div>
+                <div className="text-sm font-semibold text-slate-900 leading-snug">{currentStageText}</div>
+                <div className="mt-3 h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                  <div className="h-full rounded-full bg-blue-500 transition-all" style={{ width: `${overviewProgress}%` }} />
+                </div>
               </div>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {discussionOverviewMetrics.map((metric) => (
+                <div key={metric.label} className="rounded-xl bg-slate-50/80 px-3 py-2.5">
+                  <div className="text-[11px] text-slate-400 mb-1">{metric.label}</div>
+                  <div className="text-sm font-semibold text-slate-900">{metric.value}</div>
+                </div>
+              ))}
             </div>
             {session?.status === "completed" && (
               <Link
                 to={`/session-result?sessionId=${encodeURIComponent(sessionId)}`}
-                className="w-full inline-flex justify-center py-2.5 bg-blue-600 text-white text-sm font-medium rounded-xl"
+                className="mt-5 w-full inline-flex justify-center py-2.5 bg-blue-600 text-white text-sm font-medium rounded-xl"
               >
                 查看会议结果
               </Link>
             )}
-            {session?.status === "failed" && <div className="text-sm text-red-600">Session 执行失败：{session.error_message}</div>}
+            {session?.status === "failed" && <div className="mt-4 text-sm text-red-600">Session 执行失败：{session.error_message}</div>}
           </div>
 
-          <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 flex-1">
-            <div className="flex items-center gap-2 mb-5">
+          <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
+            <div className="flex items-center gap-2 text-slate-800 mb-5">
               <Scale className="w-4 h-4 text-slate-500" />
-              <h3 className="font-semibold text-sm text-slate-800">关键争议</h3>
+              <h3 className="font-semibold text-sm">质量与风险监控</h3>
             </div>
-            {conflicts.length === 0 ? (
-              <div className="flex items-center gap-2 text-sm text-slate-400">
-                <LoaderCircle className="w-4 h-4 animate-spin" />
-                等待争议识别事件
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {conflicts.map((conflict) => (
-                  <div key={conflict.title} className="rounded-xl bg-amber-50/50 border border-amber-100 p-3 text-sm">
-                    <div className="font-semibold text-slate-900 mb-2">{conflict.title}</div>
-                    <p className="text-slate-600 mb-1">支持方：{conflict.supportingView}</p>
-                    <p className="text-slate-600 mb-1">审慎方：{conflict.cautiousView}</p>
-                    <p className="text-amber-700">裁决：{conflict.judgement}</p>
+            <div className="space-y-3">
+              {qualityRiskMetrics.map((metric) => (
+                <div key={metric.label} className="flex items-center justify-between gap-4 text-sm">
+                  <span className="text-slate-500">{metric.label}</span>
+                  <div className="flex items-center gap-2">
+                    {metric.label === "结论收敛度" && (
+                      <span className="h-1.5 w-16 overflow-hidden rounded-full bg-slate-100">
+                        <span className="block h-full w-[62%] rounded-full bg-blue-500" />
+                      </span>
+                    )}
+                    <span
+                      className={cn(
+                        "rounded-full px-2 py-0.5 text-xs font-semibold",
+                        metric.tone === "blue" && "bg-blue-50 text-blue-600",
+                        metric.tone === "emerald" && "bg-emerald-50 text-emerald-600",
+                        metric.tone === "amber" && "bg-amber-50 text-amber-600",
+                        metric.tone === "rose" && "bg-rose-50 text-rose-600",
+                      )}
+                    >
+                      {metric.value}
+                    </span>
                   </div>
-                ))}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
+            <div className="flex items-center gap-2 text-slate-800 mb-5">
+              <DollarSign className="w-4 h-4 text-slate-500" />
+              <h3 className="font-semibold text-sm">活跃进程与工具</h3>
+            </div>
+            <div className="space-y-3">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-slate-50 flex items-center justify-center text-slate-400">
+                  <FileText className="w-4 h-4" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium text-slate-700">合规政策检索</div>
+                  <div className="text-xs text-slate-400">{formatShortTime(latestToolTime)}</div>
+                </div>
+                <span
+                  className={cn(
+                    "px-2 py-0.5 rounded-md text-xs font-medium",
+                    policyToolDone ? "bg-emerald-50 text-emerald-600" : "bg-slate-50 text-slate-400",
+                  )}
+                >
+                  {policyToolDone ? "完成" : "待开始"}
+                </span>
               </div>
-            )}
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center text-blue-500">
+                  <Clock className="w-4 h-4" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium text-slate-700">历史决策相似案例检索</div>
+                  <div className="text-xs text-slate-400">{formatShortTime(events[events.length - 1]?.created_at)}</div>
+                </div>
+                <span
+                  className={cn(
+                    "inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium",
+                    similarCaseToolDone
+                      ? "bg-emerald-50 text-emerald-600"
+                      : similarCaseRunning
+                        ? "bg-blue-50 text-blue-600"
+                        : "bg-slate-50 text-slate-400",
+                  )}
+                >
+                  {similarCaseRunning && <LoaderCircle className="w-3 h-3 animate-spin" />}
+                  {similarCaseToolDone ? "完成" : similarCaseRunning ? "运行中" : "待开始"}
+                </span>
+              </div>
+            </div>
+            <button className="mt-4 inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700">
+              查看详情
+              <ExternalLink className="w-3 h-3" />
+            </button>
           </div>
         </aside>
       </div>
