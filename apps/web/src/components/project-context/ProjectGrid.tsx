@@ -24,9 +24,10 @@ const ICON_POOL: { icon: LucideIcon; iconColor: string; iconBg: string }[] = [
 interface ProjectGridProps {
   projects?: Project[];
   searchQuery?: string;
+  onEditProject?: (project: Project) => void;
 }
 
-export function ProjectGrid({ projects: externalProjects, searchQuery = "" }: ProjectGridProps) {
+export function ProjectGrid({ projects: externalProjects, searchQuery = "", onEditProject }: ProjectGridProps) {
   const allProjects = (externalProjects ?? []).filter(
     (p) => !searchQuery || p.name.includes(searchQuery),
   );
@@ -61,7 +62,11 @@ export function ProjectGrid({ projects: externalProjects, searchQuery = "" }: Pr
                   </span>
                 </div>
               </div>
-              <button className="text-slate-400 hover:text-slate-600 transition-colors p-1 -mr-2">
+              <button
+                onClick={() => onEditProject?.(project)}
+                className="text-slate-400 hover:text-slate-600 transition-colors p-1 -mr-2"
+                title="编辑项目"
+              >
                 <MoreHorizontal className="w-5 h-5" />
               </button>
             </div>

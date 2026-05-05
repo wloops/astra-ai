@@ -272,6 +272,24 @@
 - **WHEN** 运行 `npm --prefix apps/web run test`
 - **THEN** 全部 Vitest 测试 SHALL 通过，覆盖 ErrorBanner 组件和 apiClient
 
+### Requirement: 角色编辑与更新
+
+前端 RoleConfig SHALL 支持编辑已有角色并提交更新。
+
+#### Scenario: 编辑角色
+- **WHEN** 用户在角色详情中点击"编辑基础信息"
+- **THEN** 前端 SHALL 展示预填当前值的编辑表单
+- **AND** 提交时 SHALL 调用 `PUT /agent-roles/{id}` 更新角色
+
+### Requirement: 项目编辑与更新
+
+前端 ProjectContext SHALL 支持编辑已有项目并提交更新。
+
+#### Scenario: 编辑项目
+- **WHEN** 用户在项目卡片上点击编辑
+- **THEN** 前端 SHALL 展示预填当前值的编辑表单
+- **AND** 提交时 SHALL 调用 `PUT /projects/{id}` 更新项目
+
 ### Requirement: CI 自动验证
 
 项目 SHALL 具备 GitHub Actions CI 流水线，在 push 和 PR 时自动验证。

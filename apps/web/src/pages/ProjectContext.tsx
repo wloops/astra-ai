@@ -6,6 +6,11 @@ import { ProjectsOverview } from "../components/project-context/ProjectsOverview
 import { ProjectFilters } from "../components/project-context/ProjectFilters";
 import { ProjectGrid } from "../components/project-context/ProjectGrid";
 import { ErrorBanner } from "../components/common/ErrorBanner";
+import { Button } from "../../components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../components/ui/dialog";
+import { Input } from "../../components/ui/input";
+import { Label } from "../../components/ui/label";
+import { Textarea } from "../../components/ui/textarea";
 import { apiClient } from "../api/client";
 import type { Project } from "../api/types";
 
@@ -14,7 +19,11 @@ export function ProjectContext() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
+  const [editError, setEditError] = useState<string | null>(null);
   const [showNewDialog, setShowNewDialog] = useState(false);
+  const [showEditDialog, setShowEditDialog] = useState(false);
+  const [editProjectId, setEditProjectId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState({ name: "", description: "", goal: "", background: "" });
   const [searchQuery, setSearchQuery] = useState("");
 
   const loadProjects = () => {
@@ -38,6 +47,30 @@ export function ProjectContext() {
     goal: "",
     background: "",
   });
+
+  const openEditProject = (project: Project) => {
+    setEditProjectId(project.id);
+    setEditForm({
+      name: project.name,
+      description: project.description ?? "",
+      goal: project.goal ?? "",
+      background: project.background ?? "",
+    });
+    setEditError(null);
+    setShowEditDialog(true);
+  };
+
+  const handleUpdateProject = async () => {
+    if (!editProjectId || !editForm.name.trim()) return;
+    setEditError(null);
+    try {
+      const updated = await apiClient.updateProject(editProjectId, editForm);
+      setProjects((prev) => prev.map((p) => (p.id === editProjectId ? updated : p)));
+      setShowEditDialog(false);
+    } catch (err) {
+      setEditError(err instanceof Error ? err.message : "更新项目失败");
+    }
+  };
 
   const handleCreateProject = async () => {
     if (!newProject.name.trim()) return;
@@ -107,7 +140,7 @@ export function ProjectContext() {
             {loading ? (
               <div className="bg-white rounded-xl border border-slate-200 p-12 text-center text-slate-400 text-sm">加载中…</div>
             ) : (
-              <ProjectGrid projects={projects} searchQuery={searchQuery} />
+              <ProjectGrid projects={projects} searchQuery={searchQuery} onEditProject={openEditProject} />
             )}
           </div>
         </div>
@@ -180,6 +213,38 @@ export function ProjectContext() {
             </div>
           </div>
         )}
+
+        {/* Edit Project Dialog */}
+        <Dialog open={showEditDialog} onOpenChange={setShowEditDialog}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>编辑项目</DialogTitle>
+            </DialogHeader>
+            {editError && <ErrorBanner message={editError} onDismiss={() => setEditError(null)} />}
+            <div className="space-y-4 mt-4">
+              <div className="grid gap-2">
+                <Label htmlFor="edit-project-name">项目名称 *</Label>
+                <Input id="edit-project-name" value={editForm.name} onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))} placeholder="输入项目名称" />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="edit-project-desc">项目描述</Label>
+                <Textarea id="edit-project-desc" value={editForm.description} onChange={(e) => setEditForm((f) => ({ ...f, description: e.target.value }))} placeholder="简要描述项目目标与范围" rows={3} />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="edit-project-goal">目标</Label>
+                <Input id="edit-project-goal" value={editForm.goal} onChange={(e) => setEditForm((f) => ({ ...f, goal: e.target.value }))} placeholder="项目核心目标" />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="edit-project-bg">背景</Label>
+                <Textarea id="edit-project-bg" value={editForm.background} onChange={(e) => setEditForm((f) => ({ ...f, background: e.target.value }))} placeholder="项目背景信息" rows={2} />
+              </div>
+            </div>
+            <div className="flex justify-end gap-3 mt-6">
+              <Button variant="outline" onClick={() => setShowEditDialog(false)}>取消</Button>
+              <Button onClick={handleUpdateProject} disabled={!editForm.name.trim()}>保存</Button>
+            </div>
+          </DialogContent>
+        </Dialog>
       </main>
     </div>
   );

@@ -35,6 +35,11 @@ export const apiClient = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  updateProject: (id: string, payload: Partial<Project>) =>
+    request<Project>(`/projects/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
 
   // Agent Roles
   listAgentRoles: () => request<AgentRole[]>("/agent-roles"),
@@ -43,12 +48,22 @@ export const apiClient = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  updateAgentRole: (id: string, payload: Partial<AgentRole>) =>
+    request<AgentRole>(`/agent-roles/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
 
   // Scenario Templates
   listScenarioTemplates: () => request<ScenarioTemplate[]>("/scenario-templates"),
   createScenarioTemplate: (payload: Partial<ScenarioTemplate>) =>
     request<ScenarioTemplate>("/scenario-templates", {
       method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateScenarioTemplate: (id: string, payload: Partial<ScenarioTemplate>) =>
+    request<ScenarioTemplate>(`/scenario-templates/${encodeURIComponent(id)}`, {
+      method: "PUT",
       body: JSON.stringify(payload),
     }),
 

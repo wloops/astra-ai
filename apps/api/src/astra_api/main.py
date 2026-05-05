@@ -64,6 +64,19 @@ def create_project(payload: ProjectCreate, session: Session = Depends(get_sessio
     return project
 
 
+@app.put("/projects/{project_id}", response_model=ProjectRead)
+def update_project(project_id: str, payload: ProjectCreate, session: Session = Depends(get_session)) -> Project:
+    project = session.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    for key, value in payload.model_dump().items():
+        setattr(project, key, value)
+    session.add(project)
+    session.commit()
+    session.refresh(project)
+    return project
+
+
 @app.get("/agent-roles", response_model=list[AgentRoleRead])
 def list_agent_roles(session: Session = Depends(get_session)) -> list[AgentRole]:
     return session.exec(select(AgentRole).order_by(AgentRole.created_at)).all()
@@ -72,6 +85,19 @@ def list_agent_roles(session: Session = Depends(get_session)) -> list[AgentRole]
 @app.post("/agent-roles", response_model=AgentRoleRead)
 def create_agent_role(payload: AgentRoleCreate, session: Session = Depends(get_session)) -> AgentRole:
     role = AgentRole(**payload.model_dump())
+    session.add(role)
+    session.commit()
+    session.refresh(role)
+    return role
+
+
+@app.put("/agent-roles/{role_id}", response_model=AgentRoleRead)
+def update_agent_role(role_id: str, payload: AgentRoleCreate, session: Session = Depends(get_session)) -> AgentRole:
+    role = session.get(AgentRole, role_id)
+    if role is None:
+        raise HTTPException(status_code=404, detail="AgentRole not found")
+    for key, value in payload.model_dump().items():
+        setattr(role, key, value)
     session.add(role)
     session.commit()
     session.refresh(role)
@@ -90,6 +116,19 @@ def create_scenario_template(payload: ScenarioTemplateCreate, session: Session =
     session.commit()
     session.refresh(scenario)
     return scenario
+
+
+@app.put("/scenario-templates/{scenario_id}", response_model=ScenarioTemplateRead)
+def update_scenario_template(scenario_id: str, payload: ScenarioTemplateCreate, session: Session = Depends(get_session)) -> ScenarioTemplate:
+    tmpl = session.get(ScenarioTemplate, scenario_id)
+    if tmpl is None:
+        raise HTTPException(status_code=404, detail="ScenarioTemplate not found")
+    for key, value in payload.model_dump().items():
+        setattr(tmpl, key, value)
+    session.add(tmpl)
+    session.commit()
+    session.refresh(tmpl)
+    return tmpl
 
 
 @app.post("/sessions", response_model=SessionRead)

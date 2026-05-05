@@ -25,6 +25,11 @@ import {
 } from "lucide-react";
 import { cn } from "../lib/utils";
 import { ErrorBanner } from "../components/common/ErrorBanner";
+import { Button } from "../../components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../components/ui/dialog";
+import { Input } from "../../components/ui/input";
+import { Label } from "../../components/ui/label";
+import { Textarea } from "../../components/ui/textarea";
 import { apiClient } from "../api/client";
 import type { AgentRole, ScenarioTemplate } from "../api/types";
 
@@ -134,6 +139,14 @@ export function RoleConfig() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
+  const [editError, setEditError] = useState<string | null>(null);
+
+  // Edit dialog state
+  const [showEditRole, setShowEditRole] = useState(false);
+  const [editRoleId, setEditRoleId] = useState<string | null>(null);
+  const [editRoleForm, setEditRoleForm] = useState({
+    name: "", code: "", description: "", responsibilities: "", focus_areas: "", tools: "", output_style: "",
+  });
 
   // Tab state
   const [tab, setTab] = useState<"roles" | "scenes">("roles");
@@ -180,6 +193,41 @@ export function RoleConfig() {
     tools: "",
     output_style: "",
   });
+
+  const openEditRole = (role: AgentRole) => {
+    setEditRoleId(role.id);
+    setEditRoleForm({
+      name: role.name,
+      code: role.code,
+      description: role.description ?? "",
+      responsibilities: (role.responsibilities ?? []).join("，"),
+      focus_areas: (role.focus_areas ?? []).join("，"),
+      tools: (role.tools ?? []).join("，"),
+      output_style: role.output_style ?? "",
+    });
+    setEditError(null);
+    setShowEditRole(true);
+  };
+
+  const handleUpdateRole = async () => {
+    if (!editRoleId || !editRoleForm.name.trim() || !editRoleForm.code.trim()) return;
+    setEditError(null);
+    try {
+      const updated = await apiClient.updateAgentRole(editRoleId, {
+        name: editRoleForm.name,
+        code: editRoleForm.code,
+        description: editRoleForm.description,
+        responsibilities: editRoleForm.responsibilities.split(/[,，]/).filter(Boolean),
+        focus_areas: editRoleForm.focus_areas.split(/[,，]/).filter(Boolean),
+        tools: editRoleForm.tools.split(/[,，]/).filter(Boolean),
+        output_style: editRoleForm.output_style,
+      });
+      setRoles((prev) => prev.map((r) => (r.id === editRoleId ? updated : r)));
+      setShowEditRole(false);
+    } catch (err) {
+      setEditError(err instanceof Error ? err.message : "更新角色失败");
+    }
+  };
 
   const handleCreateRole = async () => {
     if (!newRoleForm.name.trim() || !newRoleForm.code.trim()) return;
@@ -356,7 +404,13 @@ export function RoleConfig() {
                     <p className="text-slate-500 text-[14px]">{activeRole.desc}</p>
                   </div>
                 </div>
-                <button className="flex items-center gap-1.5 text-slate-700 hover:text-slate-900 bg-white border border-slate-200 hover:bg-slate-50 px-3.5 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm">
+                <button
+                  onClick={() => {
+                    const original = roles.find((r) => r.id === activeRole.id);
+                    if (original) openEditRole(original);
+                  }}
+                  className="flex items-center gap-1.5 text-slate-700 hover:text-slate-900 bg-white border border-slate-200 hover:bg-slate-50 px-3.5 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm"
+                >
                   <PenSquare className="w-4 h-4" />
                   编辑基础信息
                 </button>
@@ -566,6 +620,50 @@ export function RoleConfig() {
             </div>
           </div>
         )}
+
+        {/* Edit Role Dialog */}
+        <Dialog open={showEditRole} onOpenChange={setShowEditRole}>
+          <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>编辑角色</DialogTitle>
+            </DialogHeader>
+            {editError && <ErrorBanner message={editError} onDismiss={() => setEditError(null)} />}
+            <div className="space-y-4 mt-4">
+              <div className="grid gap-2">
+                <Label htmlFor="edit-role-name">角色名称 *</Label>
+                <Input id="edit-role-name" value={editRoleForm.name} onChange={(e) => setEditRoleForm((f) => ({ ...f, name: e.target.value }))} placeholder="如：安全合规" />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="edit-role-code">代号 *</Label>
+                <Input id="edit-role-code" value={editRoleForm.code} onChange={(e) => setEditRoleForm((f) => ({ ...f, code: e.target.value }))} placeholder="如：security_analyst" />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="edit-role-desc">描述</Label>
+                <Textarea id="edit-role-desc" value={editRoleForm.description} onChange={(e) => setEditRoleForm((f) => ({ ...f, description: e.target.value }))} placeholder="角色简要描述" rows={2} />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="edit-role-resp">职责（逗号分隔）</Label>
+                <Input id="edit-role-resp" value={editRoleForm.responsibilities} onChange={(e) => setEditRoleForm((f) => ({ ...f, responsibilities: e.target.value }))} placeholder="如：发现安全问题, 审计日志" />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="edit-role-focus">关注维度（逗号分隔）</Label>
+                <Input id="edit-role-focus" value={editRoleForm.focus_areas} onChange={(e) => setEditRoleForm((f) => ({ ...f, focus_areas: e.target.value }))} placeholder="如：安全性, 合规性" />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="edit-role-tools">工具（逗号分隔）</Label>
+                <Input id="edit-role-tools" value={editRoleForm.tools} onChange={(e) => setEditRoleForm((f) => ({ ...f, tools: e.target.value }))} placeholder="如：日志分析, 漏洞扫描" />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="edit-role-style">输出风格</Label>
+                <Input id="edit-role-style" value={editRoleForm.output_style} onChange={(e) => setEditRoleForm((f) => ({ ...f, output_style: e.target.value }))} placeholder="如：专业严谨" />
+              </div>
+            </div>
+            <div className="flex justify-end gap-3 mt-6">
+              <Button variant="outline" onClick={() => setShowEditRole(false)}>取消</Button>
+              <Button onClick={handleUpdateRole} disabled={!editRoleForm.name.trim() || !editRoleForm.code.trim()}>保存</Button>
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
     </div>
   );
