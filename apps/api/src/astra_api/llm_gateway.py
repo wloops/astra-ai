@@ -211,7 +211,7 @@ class LLMGateway:
                     "llm_call stage=%s role=%s status=server_error http=%d elapsed_ms=%.0f",
                     stage, role_code, status_code, elapsed_ms,
                 )
-                raise
+                return self._complete_local(role=role, stage=stage, topic=topic, project=project, context=context)
             except Exception as exc:
                 elapsed_ms = (time.perf_counter() - t_start) * 1000
                 logger.error(
