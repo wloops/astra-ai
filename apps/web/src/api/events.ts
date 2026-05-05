@@ -12,31 +12,123 @@ const SESSION_EVENT_TYPES: SessionEventType[] = [
   "session_failed",
 ];
 
+const MAX_RETRIES = 5;
+const RETRY_DELAYS = [1000, 2000, 4000, 8000, 16000];
+const HEARTBEAT_INTERVAL = 30_000;
+
 export interface SessionEventSubscription {
   close: () => void;
 }
 
+export interface SubscribeCallbacks {
+  onEvent: (event: SessionEvent) => void;
+  onError?: (message: string) => void;
+  onReconnecting?: (attempt: number, maxRetries: number) => void;
+  onReconnected?: () => void;
+  onHeartbeatTimeout?: () => void;
+  onHeartbeatRestored?: () => void;
+  onMaxRetriesExceeded?: () => void;
+  /** 返回 true 表示继续重连；Session 已完成/失败时应返回 false。 */
+  shouldReconnect?: () => boolean;
+}
+
+/**
+ * 创建 SSE 订阅，支持指数退避重连和心跳检测。
+ * 服务端会按 sequence 回放事件，因此重连后由调用方按 event.id 去重。
+ */
 export function subscribeToSessionEvents(
   sessionId: string,
-  handlers: {
-    onEvent: (event: SessionEvent) => void;
-    onError?: (error: Event) => void;
-  },
+  callbacks: SubscribeCallbacks,
 ): SessionEventSubscription {
-  const source = new EventSource(`${API_BASE_URL}/sessions/${encodeURIComponent(sessionId)}/events`);
+  let retryCount = 0;
+  let heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let source: EventSource | null = null;
+  let closed = false;
 
-  const handleMessage = (message: MessageEvent<string>) => {
-    try {
-      handlers.onEvent(JSON.parse(message.data) as SessionEvent);
-    } catch {
-      // SSE 流属于演示闭环的关键路径，单条异常事件不应中断后续事件消费。
+  function clearHeartbeat() {
+    if (heartbeatTimer) {
+      clearTimeout(heartbeatTimer);
+      heartbeatTimer = null;
     }
-  };
+  }
 
-  SESSION_EVENT_TYPES.forEach((type) => source.addEventListener(type, handleMessage));
-  source.onerror = (error) => handlers.onError?.(error);
+  function resetHeartbeat() {
+    clearHeartbeat();
+    heartbeatTimer = setTimeout(() => {
+      callbacks.onHeartbeatTimeout?.();
+    }, HEARTBEAT_INTERVAL);
+  }
+
+  function closeSource() {
+    source?.close();
+    source = null;
+  }
+
+  function connect() {
+    if (closed) return;
+
+    const url = `${API_BASE_URL}/sessions/${encodeURIComponent(sessionId)}/events`;
+    source = new EventSource(url);
+
+    source.onopen = () => {
+      if (retryCount > 0) {
+        callbacks.onReconnected?.();
+        retryCount = 0;
+      }
+      resetHeartbeat();
+    };
+
+    const handleMessage = (message: MessageEvent<string>) => {
+      try {
+        const event = JSON.parse(message.data) as SessionEvent;
+        callbacks.onEvent(event);
+        callbacks.onHeartbeatRestored?.();
+        resetHeartbeat();
+      } catch (error) {
+        // 单条坏事件不应中断 SSE 连接，但要暴露给页面方便定位协议问题。
+        callbacks.onError?.(error instanceof Error ? error.message : "解析 SSE 事件失败");
+      }
+    };
+
+    SESSION_EVENT_TYPES.forEach((type) => source?.addEventListener(type, handleMessage));
+
+    source.onerror = () => {
+      clearHeartbeat();
+      closeSource();
+
+      if (closed) return;
+
+      // 已收到终态事件后，服务端正常关闭 SSE 不是连接故障。
+      if (callbacks.shouldReconnect && !callbacks.shouldReconnect()) {
+        return;
+      }
+
+      if (retryCount < MAX_RETRIES) {
+        retryCount += 1;
+        callbacks.onReconnecting?.(retryCount, MAX_RETRIES);
+
+        const delay = RETRY_DELAYS[retryCount - 1] ?? RETRY_DELAYS[RETRY_DELAYS.length - 1];
+        reconnectTimer = setTimeout(() => {
+          connect();
+        }, delay);
+      } else {
+        callbacks.onMaxRetriesExceeded?.();
+      }
+    };
+  }
+
+  connect();
 
   return {
-    close: () => source.close(),
+    close: () => {
+      closed = true;
+      clearHeartbeat();
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      closeSource();
+    },
   };
 }

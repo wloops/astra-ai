@@ -24,6 +24,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "../lib/utils";
+import { ErrorBanner } from "../components/common/ErrorBanner";
 import { apiClient } from "../api/client";
 import type { AgentRole, ScenarioTemplate } from "../api/types";
 
@@ -131,6 +132,8 @@ export function RoleConfig() {
   const [roles, setRoles] = useState<AgentRole[]>([]);
   const [scenes, setScenes] = useState<ScenarioTemplate[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [createError, setCreateError] = useState<string | null>(null);
 
   // Tab state
   const [tab, setTab] = useState<"roles" | "scenes">("roles");
@@ -138,19 +141,20 @@ export function RoleConfig() {
   const [activeScene, setActiveScene] = useState<SceneDisplay | null>(null);
   const [showNewRole, setShowNewRole] = useState(false);
 
-  useEffect(() => {
-    async function load() {
-      try {
-        const [r, s] = await Promise.all([apiClient.listAgentRoles(), apiClient.listScenarioTemplates()]);
+  const loadData = () => {
+    setLoading(true);
+    setLoadError(null);
+    Promise.all([apiClient.listAgentRoles(), apiClient.listScenarioTemplates()])
+      .then(([r, s]) => {
         setRoles(r);
         setScenes(s);
-      } catch {
-        // keep empty
-      } finally {
-        setLoading(false);
-      }
-    }
-    load();
+      })
+      .catch((err) => setLoadError(err instanceof Error ? err.message : "加载数据失败"))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    loadData();
   }, []);
 
   const roleDisplays: RoleDisplay[] = roles.map(mapRoleToDisplay);
@@ -179,6 +183,7 @@ export function RoleConfig() {
 
   const handleCreateRole = async () => {
     if (!newRoleForm.name.trim() || !newRoleForm.code.trim()) return;
+    setCreateError(null);
     try {
       const created = await apiClient.createAgentRole({
         name: newRoleForm.name,
@@ -192,8 +197,8 @@ export function RoleConfig() {
       setRoles((prev) => [...prev, created]);
       setNewRoleForm({ name: "", code: "", description: "", responsibilities: "", focus_areas: "", tools: "", output_style: "" });
       setShowNewRole(false);
-    } catch {
-      alert("创建角色失败，请重试");
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : "创建角色失败，请重试");
     }
   };
 
@@ -219,6 +224,9 @@ export function RoleConfig() {
             <h1 className="text-[20px] font-bold text-slate-900 mb-1.5">角色与场景配置</h1>
             <p className="text-[13px] text-slate-500 leading-relaxed">管理角色能力与场景模板，打造高质量研讨体验</p>
           </div>
+
+          {loadError && <div className="mb-4"><ErrorBanner message={loadError} onRetry={loadData} /></div>}
+          {createError && <div className="mb-4"><ErrorBanner message={createError} onDismiss={() => setCreateError(null)} /></div>}
 
           <div className="flex p-1 bg-slate-200/50 rounded-lg mb-6 shadow-none">
             <button

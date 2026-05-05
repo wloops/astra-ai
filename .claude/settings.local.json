@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(openspec --version)",
-      "Bash(openspec --help)"
+      "Bash(openspec --help)",
+      "Bash(npm --prefix apps/web run build)"
     ]
   }
 }

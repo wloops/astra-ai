@@ -5,21 +5,30 @@ import { ProjectSidebar } from "../components/project-context/ProjectSidebar";
 import { ProjectsOverview } from "../components/project-context/ProjectsOverview";
 import { ProjectFilters } from "../components/project-context/ProjectFilters";
 import { ProjectGrid } from "../components/project-context/ProjectGrid";
+import { ErrorBanner } from "../components/common/ErrorBanner";
 import { apiClient } from "../api/client";
 import type { Project } from "../api/types";
 
 export function ProjectContext() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [createError, setCreateError] = useState<string | null>(null);
   const [showNewDialog, setShowNewDialog] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
 
-  useEffect(() => {
+  const loadProjects = () => {
+    setLoading(true);
+    setLoadError(null);
     apiClient
       .listProjects()
       .then(setProjects)
-      .catch(() => {})
+      .catch((err) => setLoadError(err instanceof Error ? err.message : "加载项目失败"))
       .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    loadProjects();
   }, []);
 
   // New project form state
@@ -32,6 +41,7 @@ export function ProjectContext() {
 
   const handleCreateProject = async () => {
     if (!newProject.name.trim()) return;
+    setCreateError(null);
     try {
       const created = await apiClient.createProject({
         name: newProject.name,
@@ -42,8 +52,8 @@ export function ProjectContext() {
       setProjects((prev) => [created, ...prev]);
       setNewProject({ name: "", description: "", goal: "", background: "" });
       setShowNewDialog(false);
-    } catch {
-      alert("创建项目失败，请重试");
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : "创建项目失败，请重试");
     }
   };
 
@@ -57,6 +67,16 @@ export function ProjectContext() {
           <div>
             <h1 className="text-[28px] leading-tight font-bold text-slate-900 mb-1">项目上下文</h1>
             <p className="text-sm text-slate-500">管理项目相关信息、文档与知识，为多 Agent 研讨提供完整的业务上下文</p>
+            {loadError && (
+              <div className="mt-3">
+                <ErrorBanner message={loadError} onRetry={loadProjects} />
+              </div>
+            )}
+            {createError && (
+              <div className="mt-3">
+                <ErrorBanner message={createError} onDismiss={() => setCreateError(null)} />
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-3">
             <button className="px-4 py-2 border border-slate-200 bg-white text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-50 hover:border-slate-300 transition-all shadow-sm flex items-center gap-2">

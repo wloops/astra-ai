@@ -113,7 +113,7 @@ function NavItem({ icon, label, count, active }: { icon: React.ReactNode; label:
   );
 }
 
-function TagItem({ color, label, count }: { color: string; label: string; count: number }) {
+function TagItem({ color, label, count }: { key?: React.Key; color: string; label: string; count: number }) {
   return (
     <div className="flex items-center justify-between px-3 py-2 rounded-lg cursor-pointer transition-colors text-slate-600 hover:bg-slate-50 hover:text-slate-900">
       <div className="flex items-center gap-3">

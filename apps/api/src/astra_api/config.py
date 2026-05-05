@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     llm_api_key: str | None = None
     llm_model: str = "gpt-4o-mini"
     event_poll_interval_seconds: float = 0.5
+    llm_timeout_seconds: float = 60.0
 
     model_config = SettingsConfigDict(
         # 支持从仓库根目录启动，也支持把后端专用配置放在 apps/api/.env。

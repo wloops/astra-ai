@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Bot, Check, Code2, Copy, FileText, LoaderCircle, MessageSquare, Scale, ShieldCheck, User } from "lucide-react";
 import { apiClient } from "../api/client";
@@ -24,6 +24,23 @@ interface ConflictItem {
 }
 
 const roleIcons = [Bot, User, Code2, ShieldCheck];
+
+const STAGE_LABELS: Record<string, string> = {
+  init_session: "初始化会议",
+  load_context: "加载项目上下文",
+  clarify_topic: "澄清议题",
+  independent_review: "独立评审",
+  detect_conflict: "识别争议",
+  debate: "交叉辩论",
+  judge_and_summarize: "裁决总结",
+  generate_actions: "生成行动项",
+  finalize_minutes: "生成会议纪要",
+};
+
+function stageLabel(stage: string | null | undefined): string {
+  if (!stage) return "会议流程";
+  return STAGE_LABELS[stage] ?? stage;
+}
 
 function asText(value: unknown): string {
   if (typeof value === "string") return value;
@@ -56,6 +73,18 @@ export function Workspace() {
   const [conflicts, setConflicts] = useState<ConflictItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(Boolean(sessionId));
+  const [reconnecting, setReconnecting] = useState(false);
+  const [heartbeatWarning, setHeartbeatWarning] = useState(false);
+  const sessionStatusRef = useRef<string | null>(null);
+  const rolesRef = useRef<AgentRole[]>([]);
+
+  // 保持 ref 与状态同步
+  useEffect(() => {
+    sessionStatusRef.current = session?.status ?? null;
+  }, [session?.status]);
+  useEffect(() => {
+    rolesRef.current = roles;
+  }, [roles]);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -94,23 +123,30 @@ export function Workspace() {
 
     const subscription = subscribeToSessionEvents(sessionId, {
       onEvent: (event) => {
+        setReconnecting(false);
+        setHeartbeatWarning(false);
+
         setEvents((current) =>
           current.some((item) => item.id === event.id) ? current : [...current, event].sort((a, b) => a.sequence - b.sequence),
         );
 
         if (event.type === "agent_message") {
-          const roleName = roles.find((role) => role.code === event.role_code)?.name ?? event.role_code ?? "Agent";
-          setMessages((current) => [
-            ...current,
-            {
-              id: event.id,
-              roleName,
-              stage: event.stage ?? "",
-              content: asText(event.payload),
-              createdAt: event.created_at,
-              roleCode: event.role_code,
-            },
-          ]);
+          const roleName = rolesRef.current.find((role) => role.code === event.role_code)?.name ?? event.role_code ?? "Agent";
+          setMessages((current) =>
+            current.some((m) => m.id === event.id)
+              ? current
+              : [
+                  ...current,
+                  {
+                    id: event.id,
+                    roleName,
+                    stage: event.stage ?? "",
+                    content: asText(event.payload),
+                    createdAt: event.created_at,
+                    roleCode: event.role_code,
+                  },
+                ],
+          );
         }
 
         if (event.type === "conflict_detected") {
@@ -120,34 +156,80 @@ export function Workspace() {
 
         if (event.type === "session_completed") {
           setSession((current) => (current ? { ...current, status: "completed" } : current));
+          setReconnecting(false);
+          setHeartbeatWarning(false);
+          sessionStatusRef.current = "completed"; // 立即更新 ref，避免重连循环
         }
 
         if (event.type === "session_failed") {
           setSession((current) => (current ? { ...current, status: "failed" } : current));
+          setReconnecting(false);
+          setHeartbeatWarning(false);
+          sessionStatusRef.current = "failed"; // 立即更新 ref
           setError(asText(event.payload.error) || "Session 执行失败");
         }
       },
-      onError: () => {
-        // EventSource 会在连接关闭时触发 error；完成态不需要把正常关闭展示成失败。
-        if (session?.status !== "completed" && session?.status !== "failed") {
-          setError("SSE 连接暂时不可用，请确认后端 API 正在运行。");
-        }
+      onReconnecting: () => {
+        setReconnecting(true);
+        setHeartbeatWarning(false);
+      },
+      onReconnected: () => {
+        setReconnecting(false);
+        setHeartbeatWarning(false);
+        // 重连成功后清除之前可能设置的临时错误
+        setError(null);
+      },
+      onHeartbeatTimeout: () => {
+        setHeartbeatWarning(true);
+      },
+      onHeartbeatRestored: () => {
+        setHeartbeatWarning(false);
+      },
+      onMaxRetriesExceeded: () => {
+        setReconnecting(false);
+        setError("SSE 连接失败，请刷新页面重试。");
+      },
+      shouldReconnect: () => {
+        // Session 处于终态时不应重连（完成后 SSE 流正常关闭不是故障）
+        const status = sessionStatusRef.current;
+        return status !== "completed" && status !== "failed";
       },
     });
 
     return () => subscription.close();
-  }, [roles, session?.status, sessionId]);
+  }, [sessionId]);
 
   const stages = useMemo(() => scenario?.stages ?? [], [scenario]);
-  const completedStages = useMemo(
-    () => new Set(events.filter((event) => event.type === "stage_completed" && event.stage).map((event) => event.stage as string)),
-    [events],
-  );
   const latestStartedStage = [...events]
     .reverse()
     .find((event) => event.type === "stage_started" && event.stage)?.stage;
-  const currentStage = latestStartedStage ?? session?.current_stage ?? "";
+  const terminal = session?.status === "completed" || session?.status === "failed";
+  const active = session?.status === "pending" || session?.status === "running";
+  const currentStage = terminal ? session?.current_stage ?? "" : latestStartedStage ?? session?.current_stage ?? "";
+  const completedStages = useMemo(() => {
+    const completed = new Set(
+      events.filter((event) => event.type === "stage_completed" && event.stage).map((event) => event.stage as string),
+    );
+    const currentIndex = stages.indexOf(currentStage);
+
+    // 后端不会为所有阶段发 stage_completed；展示层用阶段顺序补齐已越过的阶段。
+    if (currentIndex > 0) {
+      stages.slice(0, currentIndex).forEach((stage) => completed.add(stage));
+    }
+    if (session?.status === "completed") {
+      stages.forEach((stage) => completed.add(stage));
+    }
+    if (session?.status === "failed" && currentStage) {
+      stages.slice(0, Math.max(currentIndex, 0)).forEach((stage) => completed.add(stage));
+    }
+
+    return completed;
+  }, [currentStage, events, session?.status, stages]);
   const progress = stages.length ? Math.round((completedStages.size / stages.length) * 100) : 0;
+  const showCenteredWaiting = messages.length === 0 && active && !isLoading;
+  const showBottomWaiting = messages.length > 0 && active;
+  const showCompletedNotice = session?.status === "completed";
+  const showFailedNotice = session?.status === "failed";
 
   if (!sessionId) {
     return (
@@ -227,7 +309,9 @@ export function Workspace() {
                       {completed ? <Check className="w-3.5 h-3.5" /> : index + 1}
                     </div>
                     <div className={cn("flex flex-col -mt-0.5", completed || current ? "opacity-100" : "opacity-50")}>
-                      <span className={cn("text-sm font-medium", current ? "text-blue-600" : "text-slate-800")}>{stage}</span>
+                      <span className={cn("text-sm font-medium", current ? "text-blue-600" : "text-slate-800")}>
+                        {stageLabel(stage)}
+                      </span>
                       <span className="text-xs text-slate-400">{completed ? "已完成" : current ? "进行中" : "等待中"}</span>
                     </div>
                   </div>
@@ -243,6 +327,17 @@ export function Workspace() {
               <MessageSquare className="w-4 h-4 text-slate-500" />
               <h3 className="font-semibold text-slate-900">Agent 发言流</h3>
             </div>
+            {reconnecting && (
+              <div className="mb-3 rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm text-amber-700 flex items-center gap-2">
+                <LoaderCircle className="w-4 h-4 animate-spin" />
+                重新连接中…
+              </div>
+            )}
+            {heartbeatWarning && !reconnecting && (
+              <div className="mb-3 rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+                连接可能已中断，等待事件…
+              </div>
+            )}
             {error && <div className="mb-3 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
             <div className="flex gap-3 overflow-x-auto pb-2">
               {roles
@@ -266,8 +361,19 @@ export function Workspace() {
 
           <div className="flex-1 bg-white rounded-2xl shadow-sm border border-slate-100 overflow-y-auto p-6 space-y-6">
             {messages.length === 0 && (
-              <div className="h-full flex items-center justify-center text-sm text-slate-400">
-                {isLoading ? "正在加载会议..." : "等待后端推送 Agent 发言"}
+              <div className="h-full flex flex-col items-center justify-center gap-2 text-sm text-slate-400">
+                {isLoading || showCenteredWaiting ? <LoaderCircle className="w-5 h-5 animate-spin text-blue-500" /> : null}
+                <span>
+                  {isLoading
+                    ? "正在加载会议..."
+                    : showCenteredWaiting
+                      ? "正在等待 Agent 发言..."
+                      : showCompletedNotice
+                        ? "研讨已完成，可查看会议结果"
+                        : showFailedNotice
+                          ? "研讨已失败，请查看错误信息"
+                          : "暂无 Agent 发言"}
+                </span>
               </div>
             )}
             {messages.map((message) => (
@@ -279,7 +385,7 @@ export function Workspace() {
                   <div className="flex items-baseline gap-2">
                     <span className="font-semibold text-slate-900 text-sm">{message.roleName}</span>
                     <span className="px-2 py-0.5 bg-blue-50 text-blue-600 rounded-full text-[10px] font-medium">
-                      {message.stage || "session"}
+                      {stageLabel(message.stage)}
                     </span>
                     <span className="text-xs text-slate-400 font-medium ml-1">
                       {new Date(message.createdAt).toLocaleTimeString()}
@@ -289,6 +395,22 @@ export function Workspace() {
                 </div>
               </div>
             ))}
+            {showBottomWaiting && (
+              <div className="flex items-center justify-center gap-2 rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3 text-sm text-blue-600">
+                <LoaderCircle className="w-4 h-4 animate-spin" />
+                等待下一位 Agent 发言...
+              </div>
+            )}
+            {messages.length > 0 && showCompletedNotice && (
+              <div className="rounded-xl border border-emerald-100 bg-emerald-50/70 px-4 py-3 text-sm text-emerald-700">
+                研讨已完成，可查看会议结果
+              </div>
+            )}
+            {messages.length > 0 && showFailedNotice && (
+              <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
+                研讨已失败，请查看错误信息
+              </div>
+            )}
           </div>
         </main>
 
@@ -329,7 +451,7 @@ export function Workspace() {
               </div>
               <div className="text-sm text-slate-500">
                 当前阶段
-                <div className="text-slate-900 font-semibold mt-1">{currentStage || "等待开始"}</div>
+                <div className="text-slate-900 font-semibold mt-1">{currentStage ? stageLabel(currentStage) : "等待开始"}</div>
               </div>
             </div>
             {session?.status === "completed" && (

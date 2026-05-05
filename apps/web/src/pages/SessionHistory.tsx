@@ -19,6 +19,7 @@ import {
   Users,
 } from "lucide-react";
 import { cn } from "../lib/utils";
+import { ErrorBanner } from "../components/common/ErrorBanner";
 import { apiClient } from "../api/client";
 import type { DiscussionSession, Project, ScenarioTemplate, SessionResult } from "../api/types";
 
@@ -65,30 +66,34 @@ export function SessionHistory() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [sessionResult, setSessionResult] = useState<SessionResult | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // 搜索/过滤
   const [searchQuery, setSearchQuery] = useState("");
   const [filterProjectId, setFilterProjectId] = useState("");
   const [filterScenarioId, setFilterScenarioId] = useState("");
 
-  useEffect(() => {
-    async function loadData() {
-      try {
-        const [s, p, sc] = await Promise.all([
-          apiClient.listSessions(),
-          apiClient.listProjects(),
-          apiClient.listScenarioTemplates(),
-        ]);
-        setSessions(s);
-        setProjects(p);
-        setScenarios(sc);
-        if (s.length > 0) setActiveId(s[0].id);
-      } catch {
-        // 保持空数组
-      } finally {
-        setLoading(false);
-      }
+  const loadData = async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const [s, p, sc] = await Promise.all([
+        apiClient.listSessions(),
+        apiClient.listProjects(),
+        apiClient.listScenarioTemplates(),
+      ]);
+      setSessions(s);
+      setProjects(p);
+      setScenarios(sc);
+      if (s.length > 0) setActiveId(s[0].id);
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : "加载数据失败");
+    } finally {
+      setLoading(false);
     }
+  };
+
+  useEffect(() => {
     loadData();
   }, []);
 
@@ -136,7 +141,7 @@ export function SessionHistory() {
   const pagedSessions = filteredSessions.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   const handleRefresh = () => {
-    apiClient.listSessions().then(setSessions);
+    loadData();
   };
 
   return (
@@ -149,6 +154,11 @@ export function SessionHistory() {
           <div>
             <h1 className="text-2xl font-bold text-slate-900 mb-1">会议历史</h1>
             <p className="text-sm text-slate-500">查看和管理所有发起的高质量多 Agent 研讨会议</p>
+            {loadError && (
+              <div className="mt-3">
+                <ErrorBanner message={loadError} onRetry={loadData} />
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-3">
             <button

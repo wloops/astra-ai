@@ -4,3 +4,59 @@ INFO:     Started reloader process [24000] using WatchFiles
 INFO:     Started server process [35676]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'apps\api\src\astra_api\llm_gateway.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [35676]
+WARNING:  WatchFiles detected changes in 'apps\api\tests\test_llm_gateway.py', 'apps\api\src\astra_api\orchestrator.py', 'apps\api\tests\test_api.py'. Reloading...
+INFO:     Started server process [31040]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [31040]
+INFO:     Started server process [9292]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'apps\api\src\astra_api\config.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [9292]
+WARNING:  WatchFiles detected changes in 'apps\api\src\astra_api\llm_gateway.py'. Reloading...
+INFO:     Started server process [36656]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [36656]
+WARNING:  WatchFiles detected changes in 'apps\api\tests\test_llm_gateway.py'. Reloading...
+INFO:     Started server process [32280]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [32280]
+INFO:     Started server process [37368]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'apps\api\src\astra_api\config.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [37368]
+WARNING:  WatchFiles detected changes in 'apps\api\src\astra_api\llm_gateway.py'. Reloading...
+INFO:     Started server process [42012]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [42012]
+INFO:     Started server process [42208]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.

@@ -8,6 +8,7 @@ import { RecentProjects } from "../components/dashboard/RecentProjects";
 import { RecentMeetings } from "../components/dashboard/RecentMeetings";
 import { EfficiencyOverview } from "../components/dashboard/EfficiencyOverview";
 import { RecommendedSteps } from "../components/dashboard/RecommendedSteps";
+import { ErrorBanner } from "../components/common/ErrorBanner";
 import { apiClient } from "../api/client";
 import type { Project, DiscussionSession } from "../api/types";
 
@@ -15,22 +16,26 @@ export function Dashboard() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [sessions, setSessions] = useState<DiscussionSession[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const loadData = async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const [p, s] = await Promise.all([
+        apiClient.listProjects(),
+        apiClient.listSessions(),
+      ]);
+      setProjects(p);
+      setSessions(s);
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : "加载数据失败");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    async function loadData() {
-      try {
-        const [p, s] = await Promise.all([
-          apiClient.listProjects(),
-          apiClient.listSessions(),
-        ]);
-        setProjects(p);
-        setSessions(s);
-      } catch {
-        // 加载失败时保持空数组，组件内部会显示空状态
-      } finally {
-        setLoading(false);
-      }
-    }
     loadData();
   }, []);
 
@@ -79,6 +84,12 @@ export function Dashboard() {
 
       <main className="max-w-[1440px] mx-auto px-6 pt-8 pb-12">
         <Header />
+
+        {loadError && (
+          <div className="mt-4">
+            <ErrorBanner message={loadError} onRetry={loadData} />
+          </div>
+        )}
 
         <div className="mt-8 flex flex-col xl:flex-row gap-6">
           {/* Main Content Area */}

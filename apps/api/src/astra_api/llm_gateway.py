@@ -1,10 +1,15 @@
+import asyncio
 import json
+import logging
+import time
 from typing import Any
 
 import httpx
 
 from astra_api.config import settings
 from astra_api.models import AgentRole, Project
+
+logger = logging.getLogger(__name__)
 
 
 DEFAULT_OUTPUT: dict[str, Any] = {
@@ -132,6 +137,7 @@ class LLMGateway:
     ) -> dict[str, Any]:
         prompt_config = prompt_config or STAGE_PROMPTS.get(stage, STAGE_PROMPTS["independent_review"])
         role_name = role.name if role else "AI 主持人"
+        role_code = role.code if role else "host"
         prompt = (
             f"角色：{role_name}\n"
             f"阶段：{stage}\n"
@@ -150,17 +156,72 @@ class LLMGateway:
             "temperature": 0.2,
         }
         headers = {"Authorization": f"Bearer {settings.llm_api_key}"}
-        try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                response = await client.post(self._chat_completions_url(settings.llm_base_url), json=payload, headers=headers)
-                response.raise_for_status()
-                data = response.json()
-            content = data["choices"][0]["message"]["content"]
-            parsed = self._parse_json_content(content)
-        except Exception:
-            # 远程模型不可用或返回非 JSON 时，保持 Session 可继续推进。
-            return self._complete_local(role=role, stage=stage, topic=topic, project=project, context=context)
-        return self._normalize_output(parsed, stage=stage)
+        url = self._chat_completions_url(settings.llm_base_url)
+        timeout = settings.llm_timeout_seconds
+
+        max_retries = 2
+        for attempt in range(max_retries + 1):
+            t_start = time.perf_counter()
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    response = await client.post(url, json=payload, headers=headers)
+                    response.raise_for_status()
+                    data = response.json()
+                content = data["choices"][0]["message"]["content"]
+                parsed = self._parse_json_content(content)
+                elapsed_ms = (time.perf_counter() - t_start) * 1000
+                logger.info(
+                    "llm_call stage=%s role=%s status=success elapsed_ms=%.0f",
+                    stage, role_code, elapsed_ms,
+                )
+                return self._normalize_output(parsed, stage=stage)
+            except (httpx.TimeoutException, httpx.ConnectError) as exc:
+                elapsed_ms = (time.perf_counter() - t_start) * 1000
+                if attempt < max_retries:
+                    logger.warning(
+                        "llm_call stage=%s role=%s status=retry_%d elapsed_ms=%.0f error=%s",
+                        stage, role_code, attempt + 1, elapsed_ms, exc,
+                    )
+                    await asyncio.sleep(1)
+                    continue
+                logger.error(
+                    "llm_call stage=%s role=%s status=fallback elapsed_ms=%.0f error=%s",
+                    stage, role_code, elapsed_ms, exc,
+                )
+                return self._complete_local(role=role, stage=stage, topic=topic, project=project, context=context)
+            except httpx.HTTPStatusError as exc:
+                elapsed_ms = (time.perf_counter() - t_start) * 1000
+                status_code = exc.response.status_code
+                # 4xx 客户端错误（鉴权失败/参数错误/模型不存在）不重试，直接抛出
+                if 400 <= status_code < 500:
+                    logger.error(
+                        "llm_call stage=%s role=%s status=client_error http=%d elapsed_ms=%.0f",
+                        stage, role_code, status_code, elapsed_ms,
+                    )
+                    raise
+                # 5xx 服务端错误可重试
+                if attempt < max_retries:
+                    logger.warning(
+                        "llm_call stage=%s role=%s status=retry_%d http=%d elapsed_ms=%.0f",
+                        stage, role_code, attempt + 1, status_code, elapsed_ms,
+                    )
+                    await asyncio.sleep(1)
+                    continue
+                logger.error(
+                    "llm_call stage=%s role=%s status=server_error http=%d elapsed_ms=%.0f",
+                    stage, role_code, status_code, elapsed_ms,
+                )
+                raise
+            except Exception as exc:
+                elapsed_ms = (time.perf_counter() - t_start) * 1000
+                logger.error(
+                    "llm_call stage=%s role=%s status=error elapsed_ms=%.0f error=%s",
+                    stage, role_code, elapsed_ms, exc,
+                )
+                # JSON 解析失败等，fallback 到本地
+                return self._complete_local(role=role, stage=stage, topic=topic, project=project, context=context)
+        # 不应到达这里
+        return self._complete_local(role=role, stage=stage, topic=topic, project=project, context=context)
 
     def _complete_local(
         self,
