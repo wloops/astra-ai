@@ -3,11 +3,14 @@ schema: spec-driven
 # Project context (optional)
 # This is shown to AI when creating artifacts.
 # Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
+context: |
+  Tech stack: Python 3.12+ (FastAPI, SQLModel, SQLite, LangGraph), TypeScript (React, Vite, Tailwind CSS)
+  Monorepo: apps/api (backend), apps/web (frontend)
+  Python package manager: uv
+  Node package manager: npm
+  Testing: pytest for backend
+  Domain: 多 Agent 协同编排与任务执行平台（Astra AI）
+  Conventions: OpenSpec spec-driven development
 
 # Per-artifact rules (optional)
 # Add custom rules for specific artifacts.
