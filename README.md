@@ -4,7 +4,6 @@
 
 - 前端: Vercel — `https://astra.wlait.com`
 - 后端 API: `https://astra-api.wlait.com`
-- 服务器: `<REDACTED_HOST_LOGIN>`（SSH）
 
 ## 目录
 
@@ -46,7 +45,7 @@ ASTRA_LLM_TIMEOUT=60  # 可选，默认 60s
 
 ---
 
-## 生产部署
+## 部署说明（开源版）
 
 ### 架构
 
@@ -54,8 +53,8 @@ ASTRA_LLM_TIMEOUT=60  # 可选，默认 60s
 astra.wlait.com (Vercel CDN, HTTPS)
     └── React SPA，VITE_API_BASE_URL=https://astra-api.wlait.com
 
-astra-api.wlait.com (Nginx, HTTPS via Let's Encrypt)
-    └── proxy_pass → 127.0.0.1:8010 (Docker 容器)
+astra-api.wlait.com (HTTPS)
+    └── FastAPI API 服务
 ```
 
 ### 前端部署（Vercel）
@@ -73,60 +72,20 @@ cd apps/web
 npx vercel --prod
 ```
 
-### 后端部署
-
-服务器环境：
-- Debian 12, Docker 29.x, Nginx 1.22
-- 代码路径: `<REDACTED_PATH>`
-- 数据路径: `<REDACTED_PATH>/data/astra.db`（Docker volume）
-
-#### 日常运维
+### 后端部署（通用）
 
 ```bash
-ssh <REDACTED_HOST_LOGIN>
+# 启动 API（本地/服务器均可按需调整）
+uv run --project apps/api uvicorn --app-dir apps/api/src astra_api.main:app --host 0.0.0.0 --port 8010
 
-# 查看容器状态
-cd <REDACTED_PATH>
-docker compose ps
-
-# 查看日志
-docker compose logs -f          # 实时
-docker compose logs --tail 100  # 最近 100 行
-
-# 重启
-docker compose restart
-
-# 更新代码后重新部署
-cd <REDACTED_PATH>
-# 先上传新代码（git pull 或 scp）
-docker compose up -d --build
-
-# 查看 Nginx 状态
-systemctl status nginx
-nginx -t && systemctl reload nginx
-
-# 磁盘空间
-df -h <REDACTED_PATH>/data
-```
-
-#### 启用 HTTPS
-
-```bash
-ssh <REDACTED_HOST_LOGIN>
-certbot --nginx -d astra-api.wlait.com
-# 证书自动续期已内置，无需额外配置
-```
-
-#### 备份数据库
-
-```bash
-scp <REDACTED_HOST_LOGIN>:<REDACTED_PATH>/data/astra.db ./backup-$(date +%Y%m%d).db
-```
-
-#### 查看 API 是否正常
-
-```bash
+# 健康检查
 curl https://astra-api.wlait.com/health
 ```
+
+### 安全说明
+
+- 不要在仓库提交任何真实密钥、令牌、私钥、服务器账户或内网地址。
+- 生产配置请使用环境变量或密钥管理服务注入。
+- 建议将运维细节（主机信息、备份策略、故障处理 SOP）放在私有文档系统中维护。
 
 
