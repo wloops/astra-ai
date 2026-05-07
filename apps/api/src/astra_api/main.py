@@ -3,10 +3,17 @@ import json
 from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from slowapi import Limiter
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from slowapi.util import get_remote_address
+from slowapi.extension import _rate_limit_exceeded_handler
 from sqlmodel import Session, select
+from starlette.datastructures import MutableHeaders
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from astra_api.config import settings
 from astra_api.db import get_session, init_db
@@ -29,6 +36,57 @@ from astra_api.schemas import (
 from astra_api.seed import seed_defaults
 
 
+limiter = Limiter(
+    key_func=get_remote_address,
+    default_limits=["60/minute"],
+    headers_enabled=True,
+    storage_uri="memory://",
+)
+
+
+def _parse_cors_origins(raw_origins: str) -> list[str]:
+    """Parse comma-separated CORS origins; empty config keeps local compatibility."""
+
+    origins = [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
+    return origins or ["*"]
+
+
+class SecurityHeadersMiddleware:
+    """Add baseline browser security headers without changing API payloads."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        is_https = _is_https_scope(scope)
+
+        async def send_with_security_headers(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                headers.setdefault("X-Content-Type-Options", "nosniff")
+                headers.setdefault("X-Frame-Options", "DENY")
+                if is_https:
+                    headers.setdefault(
+                        "Strict-Transport-Security",
+                        "max-age=31536000; includeSubDomains",
+                    )
+            await send(message)
+
+        await self.app(scope, receive, send_with_security_headers)
+
+
+def _is_https_scope(scope: Scope) -> bool:
+    """Honor proxy TLS termination via X-Forwarded-Proto before falling back to ASGI scheme."""
+
+    headers = dict(scope.get("headers") or [])
+    forwarded_proto = headers.get(b"x-forwarded-proto", b"").decode("latin-1").split(",")[0].strip()
+    return forwarded_proto == "https" or scope.get("scheme") == "https"
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
     init_db()
@@ -39,16 +97,25 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
 
 app = FastAPI(title="Astra API", version="0.1.0", lifespan=lifespan)
 
+app.add_middleware(SecurityHeadersMiddleware)
+
+cors_origins = _parse_cors_origins(settings.cors_origins)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=cors_origins,
+    allow_credentials=cors_origins != ["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+if settings.rate_limit_enabled:
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    app.add_middleware(SlowAPIMiddleware)
+
 
 @app.get("/health")
+@limiter.exempt
 def health() -> dict[str, str]:
     return {"status": "ok"}
 
@@ -189,11 +256,17 @@ def delete_scenario_template(scenario_id: str, session: Session = Depends(get_se
 
 
 @app.post("/sessions", response_model=SessionRead)
+@limiter.limit("10/minute")
 def create_discussion_session(
+    request: Request,
+    response: Response,
     payload: SessionCreate,
     background_tasks: BackgroundTasks,
     session: Session = Depends(get_session),
 ) -> DiscussionSession:
+    # slowapi needs Request and Response for decorated handlers; business logic does not use them.
+    _ = request
+    _ = response
     if session.get(Project, payload.project_id) is None:
         raise HTTPException(status_code=404, detail="Project not found")
     scenario = session.get(ScenarioTemplate, payload.scenario_id)

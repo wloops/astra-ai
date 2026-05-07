@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     llm_base_url: str | None = None
     llm_api_key: str | None = None
     llm_model: str = "gpt-4o-mini"
+    cors_origins: str = ""
+    rate_limit_enabled: bool = True
     event_poll_interval_seconds: float = 0.5
     llm_timeout_seconds: float = 60.0
 

@@ -10,6 +10,7 @@ dependencies = [
     "langgraph>=0.2.60",
     "pydantic-settings>=2.6.0",
     "python-dotenv>=1.0.1",
+    "slowapi>=0.1.9",
     "sqlmodel>=0.0.22",
     "uvicorn[standard]>=0.32.0"
 ]

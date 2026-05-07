@@ -9,6 +9,8 @@ apps/api/.venv/
 data/
 apps/api/data/
 api-server.log
+*.err.log
+*.out.log
 
 # Environment
 .env

@@ -1,6 +1,0 @@
-
-> astra-ai@0.1.0 dev:api
-> uv run --project apps/api uvicorn --app-dir apps/api/src astra_api.main:app --reload --host 0.0.0.0 --port 8010
-
- 终止批处理操作吗(Y/N)? 
-      
