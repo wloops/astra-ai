@@ -120,6 +120,7 @@ export function Workspace() {
   const [reconnecting, setReconnecting] = useState(false);
   const [heartbeatWarning, setHeartbeatWarning] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [mobileTab, setMobileTab] = useState<'progress' | 'context' | 'monitor'>('progress');
   const sessionStatusRef = useRef<string | null>(null);
   const rolesRef = useRef<AgentRole[]>([]);
 
@@ -327,7 +328,7 @@ export function Workspace() {
     <div className="h-screen bg-[#F8FAFC] flex flex-col font-sans overflow-hidden">
       <Navbar activePage="工作台" />
       <div className="flex-1 flex gap-4 p-4 overflow-hidden">
-        <aside className="w-[320px] flex flex-col gap-4 overflow-y-auto pr-1 shrink-0">
+        <aside className="hidden lg:flex lg:flex-col w-[320px] gap-4 overflow-y-auto pr-1 shrink-0">
           <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-bold text-slate-900">多 Agent 智能研讨中</h2>
@@ -491,7 +492,7 @@ export function Workspace() {
           </div>
         </main>
 
-        <aside className="w-[360px] flex flex-col gap-4 overflow-y-auto pl-1 pr-1 shrink-0">
+        <aside className="hidden lg:flex lg:flex-col w-[360px] gap-4 overflow-y-auto pl-1 pr-1 shrink-0">
           <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2 text-slate-700">
@@ -681,6 +682,94 @@ export function Workspace() {
           </div>
         </aside>
       </div>
+
+      {/* Mobile Tab Bar */}
+      <div className="lg:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 flex items-stretch z-40" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
+        {([
+          { key: 'progress', label: '进度', icon: FileText },
+          { key: 'context', label: '上下文', icon: Target },
+          { key: 'monitor', label: '监控', icon: Scale },
+        ] as const).map((tab) => (
+          <button
+            key={tab.key}
+            onClick={() => setMobileTab(tab.key)}
+            className={cn(
+              'flex-1 flex flex-col items-center justify-center gap-0.5 py-2 text-xs font-medium transition-colors',
+              mobileTab === tab.key ? 'text-blue-600 bg-blue-50' : 'text-slate-500 hover:text-slate-700',
+            )}
+            aria-label={tab.label}
+          >
+            <tab.icon className="w-4 h-4" />
+            <span>{tab.label}</span>
+          </button>
+        ))}
+      </div>
+
+      {/* Mobile Panel */}
+      {mobileTab && (
+        <div className="lg:hidden fixed bottom-12 left-0 right-0 bg-white border-t border-slate-200 shadow-lg z-30 max-h-[40vh] overflow-y-auto p-4" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
+          {mobileTab === 'progress' && (
+            <div className="space-y-3">
+              <h3 className="text-sm font-bold text-slate-900">研讨阶段</h3>
+              <div className="space-y-3">
+                {stages.map((stage, index) => {
+                  const completed = completedStages.has(stage);
+                  const current = currentStage === stage && !completed;
+                  return (
+                    <div key={stage} className="flex items-center gap-3">
+                      <div className={cn(
+                        'w-6 h-6 rounded-full flex items-center justify-center shrink-0 text-xs font-bold',
+                        completed || current ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-400 border border-slate-200',
+                      )}>
+                        {completed ? <Check className="w-3.5 h-3.5" /> : index + 1}
+                      </div>
+                      <div className="flex flex-col">
+                        <span className={cn('text-sm', current ? 'text-blue-600 font-medium' : 'text-slate-700')}>{stageLabel(stage)}</span>
+                        <span className="text-xs text-slate-400">{completed ? '已完成' : current ? '进行中' : '等待中'}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+          {mobileTab === 'context' && (
+            <div className="space-y-3">
+              <h3 className="text-sm font-bold text-slate-900">项目上下文</h3>
+              <div className="text-sm text-slate-700">{project?.name ?? '加载中...'}</div>
+              <div className="text-xs text-slate-500">{project?.description ?? '暂无项目描述'}</div>
+              {project?.goal && (
+                <div className="mt-2">
+                  <h4 className="text-xs font-medium text-slate-500">目标</h4>
+                  <div className="text-sm text-slate-700">{project.goal}</div>
+                </div>
+              )}
+              <div className="flex flex-wrap gap-2 mt-2">
+                {(project?.tags ?? []).map((tag) => (
+                  <span key={tag} className="px-2 py-0.5 bg-blue-50 text-blue-600 rounded-full text-xs">{tag}</span>
+                ))}
+              </div>
+            </div>
+          )}
+          {mobileTab === 'monitor' && (
+            <div className="space-y-3">
+              <h3 className="text-sm font-bold text-slate-900">质量与风险</h3>
+              {session?.metrics ? (
+                <div className="space-y-2">
+                  <div className="flex justify-between text-sm"><span className="text-slate-500">结论收敛度</span><span className="font-medium">{Math.round(session.metrics.conclusion_convergence * 100)}%</span></div>
+                  <div className="flex justify-between text-sm"><span className="text-slate-500">上下文充分度</span><span className="font-medium">{session.metrics.context_label}</span></div>
+                  <div className="flex justify-between text-sm"><span className="text-slate-500">风险覆盖度</span><span className="font-medium">{session.metrics.risk_label}</span></div>
+                </div>
+              ) : (
+                <div className="text-sm text-slate-400">研讨进行中...</div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Spacer for mobile tab bar */}
+      <div className="lg:hidden h-12 shrink-0" />
     </div>
   );
 }

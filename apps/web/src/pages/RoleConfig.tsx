@@ -365,7 +365,7 @@ export function RoleConfig() {
 
       <div className="flex-1 w-full max-w-[1500px] mx-auto flex gap-6 p-6 h-[calc(100vh-64px)] overflow-hidden">
         {/* Left Sidebar */}
-        <aside className="w-[300px] flex-shrink-0 flex flex-col h-full bg-slate-50">
+        <aside className="hidden lg:flex lg:flex-col w-[300px] flex-shrink-0 h-full bg-slate-50">
           <div className="mb-6">
             <h1 className="text-[20px] font-bold text-slate-900 mb-1.5">角色与场景配置</h1>
             <p className="text-[13px] text-slate-500 leading-relaxed">管理角色能力与场景模板，打造高质量研讨体验</p>
@@ -510,7 +510,24 @@ export function RoleConfig() {
         </aside>
 
         {/* Center Panel */}
-        <main className="flex-1 flex flex-col bg-white rounded-[20px] border border-slate-200 shadow-sm overflow-hidden min-w-[500px]">
+        <main className="flex-1 flex flex-col bg-white rounded-[20px] border border-slate-200 shadow-sm overflow-hidden min-w-0">
+          {/* Mobile view toggle */}
+          <div className="lg:hidden flex items-center gap-1 p-2 border-b border-slate-100 bg-slate-50">
+            <button
+              onClick={() => setTab("roles")}
+              className={cn('flex-1 py-2 px-3 rounded-lg text-sm font-medium transition-colors', tab === 'roles' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500')}
+              aria-label="角色库"
+            >
+              角色库
+            </button>
+            <button
+              onClick={() => setTab("scenes")}
+              className={cn('flex-1 py-2 px-3 rounded-lg text-sm font-medium transition-colors', tab === 'scenes' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500')}
+              aria-label="场景模板"
+            >
+              场景模板
+            </button>
+          </div>
           {tab === "roles" && activeRole ? (
             <div className="p-8 overflow-y-auto">
               <div className="flex items-center justify-between mb-8">
@@ -675,7 +692,7 @@ export function RoleConfig() {
 
         {/* Right Sidebar - Scenes preview (only when on roles tab) */}
         {tab === "roles" && (
-          <aside className="w-[340px] flex-shrink-0 flex flex-col h-full bg-slate-50 border-l border-slate-200/60 pl-6 pt-2">
+          <aside className="hidden lg:flex lg:flex-col w-[340px] flex-shrink-0 h-full bg-slate-50 border-l border-slate-200/60 pl-6 pt-2">
             <div className="flex items-end justify-between mb-1.5">
               <h2 className="text-[17px] font-bold text-slate-900">场景模板预览</h2>
               <button className="text-blue-600 hover:text-blue-700 text-[13px] font-medium pr-1">查看全部</button>

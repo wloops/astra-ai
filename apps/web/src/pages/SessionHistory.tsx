@@ -207,6 +207,7 @@ export function SessionHistory() {
           <div className="flex items-center gap-3">
             <button
               onClick={handleRefresh}
+              aria-label="刷新"
               className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors shadow-sm"
             >
               <RefreshCcw className="w-4 h-4" />
@@ -214,6 +215,7 @@ export function SessionHistory() {
             </button>
             <button
               onClick={handleExport}
+              aria-label="导出记录"
               className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors shadow-sm"
             >
               <Download className="w-4 h-4" />
@@ -225,9 +227,10 @@ export function SessionHistory() {
         {/* Filters Section */}
         <div className="flex flex-wrap lg:flex-nowrap items-end gap-4 w-full">
           <div className="flex flex-col gap-1.5 w-full sm:w-[calc(50%-8px)] lg:w-44 xl:w-48 flex-shrink-0">
-            <label className="text-xs font-medium text-slate-600">项目</label>
+            <label htmlFor="filter-project" className="text-xs font-medium text-slate-600">项目</label>
             <div className="relative">
               <select
+                id="filter-project"
                 value={filterProjectId}
                 onChange={(e) => setFilterProjectId(e.target.value)}
                 className="w-full h-10 px-3 pr-10 appearance-none bg-white border border-slate-200 rounded-lg text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm transition-all hover:border-slate-300"
@@ -241,9 +244,10 @@ export function SessionHistory() {
             </div>
           </div>
           <div className="flex flex-col gap-1.5 w-full sm:w-[calc(50%-8px)] lg:w-44 xl:w-48 flex-shrink-0">
-            <label className="text-xs font-medium text-slate-600">场景</label>
+            <label htmlFor="filter-scenario" className="text-xs font-medium text-slate-600">场景</label>
             <div className="relative">
               <select
+                id="filter-scenario"
                 value={filterScenarioId}
                 onChange={(e) => setFilterScenarioId(e.target.value)}
                 className="w-full h-10 px-3 pr-10 appearance-none bg-white border border-slate-200 rounded-lg text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm transition-all hover:border-slate-300"
@@ -257,10 +261,11 @@ export function SessionHistory() {
             </div>
           </div>
           <div className="flex flex-col gap-1.5 w-full lg:flex-1 lg:ml-auto">
-            <label className="text-xs font-medium text-slate-600">&nbsp;</label>
+            <label htmlFor="search-sessions" className="text-xs font-medium text-slate-600">&nbsp;</label>
             <div className="relative">
               <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
               <input
+                id="search-sessions"
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
