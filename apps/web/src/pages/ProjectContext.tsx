@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Navbar } from "../components/dashboard/Navbar";
-import { Upload, Plus, X } from "lucide-react";
+import { Upload, Plus, X, Trash2 } from "lucide-react";
 import { ProjectSidebar } from "../components/project-context/ProjectSidebar";
 import { ProjectsOverview } from "../components/project-context/ProjectsOverview";
 import { ProjectFilters } from "../components/project-context/ProjectFilters";
@@ -25,13 +25,14 @@ export function ProjectContext() {
   const [editProjectId, setEditProjectId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({ name: "", description: "", goal: "", background: "" });
   const [searchQuery, setSearchQuery] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<Project | null>(null);
 
   const loadProjects = () => {
     setLoading(true);
     setLoadError(null);
     apiClient
       .listProjects()
-      .then(setProjects)
+      .then((res) => setProjects(res.items))
       .catch((err) => setLoadError(err instanceof Error ? err.message : "加载项目失败"))
       .finally(() => setLoading(false));
   };
@@ -90,6 +91,18 @@ export function ProjectContext() {
     }
   };
 
+  const handleDeleteProject = async () => {
+    if (!deleteTarget) return;
+    try {
+      await apiClient.deleteProject(deleteTarget.id);
+      setProjects((prev) => prev.filter((p) => p.id !== deleteTarget.id));
+    } catch {
+      // 删除失败静默处理
+    } finally {
+      setDeleteTarget(null);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-[#F7FAFC] font-sans text-slate-900 pb-12 select-none">
       <Navbar activePage="项目上下文" />
@@ -140,7 +153,7 @@ export function ProjectContext() {
             {loading ? (
               <div className="bg-white rounded-xl border border-slate-200 p-12 text-center text-slate-400 text-sm">加载中…</div>
             ) : (
-              <ProjectGrid projects={projects} searchQuery={searchQuery} onEditProject={openEditProject} />
+              <ProjectGrid projects={projects} searchQuery={searchQuery} onEditProject={openEditProject} onDeleteProject={setDeleteTarget} />
             )}
           </div>
         </div>
@@ -213,6 +226,22 @@ export function ProjectContext() {
             </div>
           </div>
         )}
+
+        {/* Delete Confirmation Dialog */}
+        <Dialog open={deleteTarget !== null} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>确认删除项目</DialogTitle>
+            </DialogHeader>
+            <p className="text-sm text-slate-600">
+              确定要删除项目「{deleteTarget?.name}」吗？此操作不可撤销。
+            </p>
+            <div className="flex justify-end gap-3 mt-4">
+              <Button variant="outline" onClick={() => setDeleteTarget(null)}>取消</Button>
+              <Button variant="destructive" onClick={handleDeleteProject}>确认删除</Button>
+            </div>
+          </DialogContent>
+        </Dialog>
 
         {/* Edit Project Dialog */}
         <Dialog open={showEditDialog} onOpenChange={setShowEditDialog}>

@@ -12,14 +12,17 @@ from astra_api.config import settings
 from astra_api.db import get_session, init_db
 from astra_api.models import AgentRole, DiscussionSession, Project, ScenarioTemplate, SessionEvent, SessionResult
 from astra_api.orchestrator import run_session_workflow
+from astra_api.metrics import compute_session_metrics
 from astra_api.schemas import (
     AgentRoleCreate,
     AgentRoleRead,
+    PaginatedResponse,
     ProjectCreate,
     ProjectRead,
     ScenarioTemplateCreate,
     ScenarioTemplateRead,
     SessionCreate,
+    SessionMetrics,
     SessionRead,
     SessionResultRead,
 )
@@ -50,9 +53,17 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/projects", response_model=list[ProjectRead])
-def list_projects(session: Session = Depends(get_session)) -> list[Project]:
-    return session.exec(select(Project).order_by(Project.updated_at.desc())).all()
+@app.get("/projects", response_model=PaginatedResponse[ProjectRead])
+def list_projects(
+    offset: int = 0,
+    limit: int = 50,
+    session: Session = Depends(get_session),
+) -> dict:
+    total = session.exec(select(Project)).all()
+    items = session.exec(
+        select(Project).order_by(Project.updated_at.desc()).offset(offset).limit(limit)
+    ).all()
+    return {"items": items, "total": len(total), "offset": offset, "limit": limit}
 
 
 @app.post("/projects", response_model=ProjectRead)
@@ -77,9 +88,27 @@ def update_project(project_id: str, payload: ProjectCreate, session: Session = D
     return project
 
 
-@app.get("/agent-roles", response_model=list[AgentRoleRead])
-def list_agent_roles(session: Session = Depends(get_session)) -> list[AgentRole]:
-    return session.exec(select(AgentRole).order_by(AgentRole.created_at)).all()
+@app.delete("/projects/{project_id}")
+def delete_project(project_id: str, session: Session = Depends(get_session)) -> dict:
+    project = session.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    session.delete(project)
+    session.commit()
+    return {"status": "deleted", "id": project_id}
+
+
+@app.get("/agent-roles", response_model=PaginatedResponse[AgentRoleRead])
+def list_agent_roles(
+    offset: int = 0,
+    limit: int = 50,
+    session: Session = Depends(get_session),
+) -> dict:
+    total = session.exec(select(AgentRole)).all()
+    items = session.exec(
+        select(AgentRole).order_by(AgentRole.created_at).offset(offset).limit(limit)
+    ).all()
+    return {"items": items, "total": len(total), "offset": offset, "limit": limit}
 
 
 @app.post("/agent-roles", response_model=AgentRoleRead)
@@ -104,9 +133,27 @@ def update_agent_role(role_id: str, payload: AgentRoleCreate, session: Session =
     return role
 
 
-@app.get("/scenario-templates", response_model=list[ScenarioTemplateRead])
-def list_scenario_templates(session: Session = Depends(get_session)) -> list[ScenarioTemplate]:
-    return session.exec(select(ScenarioTemplate).order_by(ScenarioTemplate.created_at)).all()
+@app.delete("/agent-roles/{role_id}")
+def delete_agent_role(role_id: str, session: Session = Depends(get_session)) -> dict:
+    role = session.get(AgentRole, role_id)
+    if role is None:
+        raise HTTPException(status_code=404, detail="AgentRole not found")
+    session.delete(role)
+    session.commit()
+    return {"status": "deleted", "id": role_id}
+
+
+@app.get("/scenario-templates", response_model=PaginatedResponse[ScenarioTemplateRead])
+def list_scenario_templates(
+    offset: int = 0,
+    limit: int = 50,
+    session: Session = Depends(get_session),
+) -> dict:
+    total = session.exec(select(ScenarioTemplate)).all()
+    items = session.exec(
+        select(ScenarioTemplate).order_by(ScenarioTemplate.created_at).offset(offset).limit(limit)
+    ).all()
+    return {"items": items, "total": len(total), "offset": offset, "limit": limit}
 
 
 @app.post("/scenario-templates", response_model=ScenarioTemplateRead)
@@ -129,6 +176,16 @@ def update_scenario_template(scenario_id: str, payload: ScenarioTemplateCreate, 
     session.commit()
     session.refresh(tmpl)
     return tmpl
+
+
+@app.delete("/scenario-templates/{scenario_id}")
+def delete_scenario_template(scenario_id: str, session: Session = Depends(get_session)) -> dict:
+    tmpl = session.get(ScenarioTemplate, scenario_id)
+    if tmpl is None:
+        raise HTTPException(status_code=404, detail="ScenarioTemplate not found")
+    session.delete(tmpl)
+    session.commit()
+    return {"status": "deleted", "id": scenario_id}
 
 
 @app.post("/sessions", response_model=SessionRead)
@@ -154,17 +211,63 @@ def create_discussion_session(
     return discussion
 
 
-@app.get("/sessions", response_model=list[SessionRead])
-def list_discussion_sessions(session: Session = Depends(get_session)) -> list[DiscussionSession]:
-    return session.exec(select(DiscussionSession).order_by(DiscussionSession.created_at.desc())).all()
+@app.get("/sessions", response_model=PaginatedResponse[SessionRead])
+def list_discussion_sessions(
+    offset: int = 0,
+    limit: int = 50,
+    session: Session = Depends(get_session),
+) -> dict:
+    total = session.exec(select(DiscussionSession)).all()
+    items = session.exec(
+        select(DiscussionSession).order_by(DiscussionSession.created_at.desc()).offset(offset).limit(limit)
+    ).all()
+    return {"items": items, "total": len(total), "offset": offset, "limit": limit}
 
 
 @app.get("/sessions/{session_id}", response_model=SessionRead)
-def get_discussion_session(session_id: str, session: Session = Depends(get_session)) -> DiscussionSession:
+def get_discussion_session(session_id: str, session: Session = Depends(get_session)) -> dict:
     discussion = session.get(DiscussionSession, session_id)
     if discussion is None:
         raise HTTPException(status_code=404, detail="Session not found")
-    return discussion
+    result = {
+        "id": discussion.id,
+        "project_id": discussion.project_id,
+        "scenario_id": discussion.scenario_id,
+        "topic": discussion.topic,
+        "role_ids": discussion.role_ids,
+        "supplemental_notes": discussion.supplemental_notes,
+        "status": discussion.status,
+        "current_stage": discussion.current_stage,
+        "error_message": discussion.error_message,
+        "created_at": discussion.created_at,
+        "updated_at": discussion.updated_at,
+        "completed_at": discussion.completed_at,
+    }
+    if discussion.status == "completed":
+        try:
+            result["metrics"] = compute_session_metrics(session_id, session)
+        except Exception:
+            result["metrics"] = None
+    else:
+        result["metrics"] = None
+    return result
+
+
+@app.delete("/sessions/{session_id}")
+def delete_discussion_session(session_id: str, session: Session = Depends(get_session)) -> dict:
+    discussion = session.get(DiscussionSession, session_id)
+    if discussion is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    # 级联删除关联事件
+    for event in session.exec(select(SessionEvent).where(SessionEvent.session_id == session_id)).all():
+        session.delete(event)
+    # 级联删除关联结果
+    result = session.exec(select(SessionResult).where(SessionResult.session_id == session_id)).first()
+    if result is not None:
+        session.delete(result)
+    session.delete(discussion)
+    session.commit()
+    return {"status": "deleted", "id": session_id}
 
 
 @app.get("/sessions/{session_id}/result", response_model=SessionResultRead)

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   Bot,
   Check,
@@ -34,11 +34,12 @@ interface AgentMessage {
 
 const roleIcons = [Bot, User, Code2, ShieldCheck];
 
-const qualityRiskMetrics = [
-  { label: "结论收敛度", value: "62%", tone: "blue" },
-  { label: "上下文充分度", value: "良好", tone: "emerald" },
-  { label: "风险覆盖度", value: "中", tone: "amber" },
-];
+function labelTone(label: string): string {
+  if (label === "优秀") return "emerald";
+  if (label === "良好") return "blue";
+  if (label === "一般") return "amber";
+  return "rose";
+}
 
 const STAGE_LABELS: Record<string, string> = {
   init_session: "初始化会议",
@@ -105,6 +106,7 @@ function asText(value: unknown): string {
 }
 
 export function Workspace() {
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const sessionId = searchParams.get("sessionId") ?? "";
   const [session, setSession] = useState<DiscussionSession | null>(null);
@@ -145,9 +147,9 @@ export function Workspace() {
         if (cancelled) return;
 
         setSession(sessionData);
-        setProject(projectList.find((item) => item.id === sessionData.project_id) ?? null);
-        setScenario(scenarioList.find((item) => item.id === sessionData.scenario_id) ?? null);
-        setRoles(roleList);
+        setProject(projectList.items.find((item) => item.id === sessionData.project_id) ?? null);
+        setScenario(scenarioList.items.find((item) => item.id === sessionData.scenario_id) ?? null);
+        setRoles(roleList.items);
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : "加载 Session 失败");
       } finally {
@@ -587,29 +589,39 @@ export function Workspace() {
               <h3 className="font-semibold text-sm">质量与风险监控</h3>
             </div>
             <div className="space-y-3">
-              {qualityRiskMetrics.map((metric) => (
-                <div key={metric.label} className="flex items-center justify-between gap-4 text-sm">
-                  <span className="text-slate-500">{metric.label}</span>
-                  <div className="flex items-center gap-2">
-                    {metric.label === "结论收敛度" && (
-                      <span className="h-1.5 w-16 overflow-hidden rounded-full bg-slate-100">
-                        <span className="block h-full w-[62%] rounded-full bg-blue-500" />
-                      </span>
-                    )}
-                    <span
-                      className={cn(
-                        "rounded-full px-2 py-0.5 text-xs font-semibold",
-                        metric.tone === "blue" && "bg-blue-50 text-blue-600",
-                        metric.tone === "emerald" && "bg-emerald-50 text-emerald-600",
-                        metric.tone === "amber" && "bg-amber-50 text-amber-600",
-                        metric.tone === "rose" && "bg-rose-50 text-rose-600",
-                      )}
-                    >
-                      {metric.value}
-                    </span>
-                  </div>
+              {session?.metrics ? (
+                <>
+                  {[
+                    { label: "结论收敛度", value: `${Math.round(session.metrics.conclusion_convergence * 100)}%`, tone: labelTone(session.metrics.conclusion_label), pct: session.metrics.conclusion_convergence },
+                    { label: "上下文充分度", value: session.metrics.context_label, tone: labelTone(session.metrics.context_label), pct: session.metrics.context_sufficiency },
+                    { label: "风险覆盖度", value: session.metrics.risk_label, tone: labelTone(session.metrics.risk_label), pct: session.metrics.risk_coverage },
+                  ].map((metric) => (
+                    <div key={metric.label} className="flex items-center justify-between gap-4 text-sm">
+                      <span className="text-slate-500">{metric.label}</span>
+                      <div className="flex items-center gap-2">
+                        <span className="h-1.5 w-16 overflow-hidden rounded-full bg-slate-100">
+                          <span className="block h-full rounded-full bg-blue-500" style={{ width: `${Math.round(metric.pct * 100)}%` }} />
+                        </span>
+                        <span
+                          className={cn(
+                            "rounded-full px-2 py-0.5 text-xs font-semibold",
+                            metric.tone === "blue" && "bg-blue-50 text-blue-600",
+                            metric.tone === "emerald" && "bg-emerald-50 text-emerald-600",
+                            metric.tone === "amber" && "bg-amber-50 text-amber-600",
+                            metric.tone === "rose" && "bg-rose-50 text-rose-600",
+                          )}
+                        >
+                          {metric.value}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </>
+              ) : (
+                <div className="text-sm text-slate-400 text-center py-3">
+                  {session?.status === "running" ? "研讨进行中…" : "暂无数据"}
                 </div>
-              ))}
+              )}
             </div>
           </div>
 
@@ -659,7 +671,10 @@ export function Workspace() {
                 </span>
               </div>
             </div>
-            <button className="mt-4 inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700">
+            <button
+              onClick={() => sessionId && navigate(`/session-result?sessionId=${sessionId}`)}
+              className="mt-4 inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700"
+            >
               查看详情
               <ExternalLink className="w-3 h-3" />
             </button>

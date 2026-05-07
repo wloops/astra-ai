@@ -16,8 +16,8 @@ async def test_sse_streams_events_and_closes_on_completed(monkeypatch: pytest.Mo
     transport = httpx.ASGITransport(app=app)  # type: ignore[arg-type]
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         # 创建 session
-        projects = (await client.get("/projects")).json()
-        scenarios = (await client.get("/scenario-templates")).json()
+        projects = (await client.get("/projects")).json()["items"]
+        scenarios = (await client.get("/scenario-templates")).json()["items"]
         create_resp = await client.post(
             "/sessions",
             json={

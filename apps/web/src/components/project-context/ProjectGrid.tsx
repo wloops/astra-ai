@@ -1,5 +1,5 @@
 import React from "react";
-import { MoreHorizontal, FileText, ShieldCheck, BookOpen, Presentation, Code2, Briefcase, type LucideIcon } from "lucide-react";
+import { MoreHorizontal, Trash2, FileText, ShieldCheck, BookOpen, Presentation, Code2, Briefcase, type LucideIcon } from "lucide-react";
 import { cn } from "../../lib/utils";
 import type { Project } from "../../api/types";
 
@@ -25,9 +25,10 @@ interface ProjectGridProps {
   projects?: Project[];
   searchQuery?: string;
   onEditProject?: (project: Project) => void;
+  onDeleteProject?: (project: Project) => void;
 }
 
-export function ProjectGrid({ projects: externalProjects, searchQuery = "", onEditProject }: ProjectGridProps) {
+export function ProjectGrid({ projects: externalProjects, searchQuery = "", onEditProject, onDeleteProject }: ProjectGridProps) {
   const allProjects = (externalProjects ?? []).filter(
     (p) => !searchQuery || p.name.includes(searchQuery),
   );
@@ -62,13 +63,22 @@ export function ProjectGrid({ projects: externalProjects, searchQuery = "", onEd
                   </span>
                 </div>
               </div>
-              <button
-                onClick={() => onEditProject?.(project)}
-                className="text-slate-400 hover:text-slate-600 transition-colors p-1 -mr-2"
-                title="编辑项目"
-              >
-                <MoreHorizontal className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-0.5">
+                <button
+                  onClick={() => onEditProject?.(project)}
+                  className="text-slate-400 hover:text-slate-600 transition-colors p-1"
+                  title="编辑项目"
+                >
+                  <MoreHorizontal className="w-5 h-5" />
+                </button>
+                <button
+                  onClick={() => onDeleteProject?.(project)}
+                  className="text-slate-300 hover:text-rose-500 transition-colors p-1"
+                  title="删除项目"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
             </div>
 
             <p className="text-sm text-slate-600 line-clamp-2 mb-4 flex-1">

@@ -48,12 +48,12 @@ export function StartSessionForm() {
         ]);
         if (cancelled) return;
 
-        setProjects(projectList);
-        setRoles(roleList);
-        setScenarios(scenarioList);
-        setProjectId(projectList[0]?.id ?? "");
-        setScenarioId(scenarioList[0]?.id ?? "");
-        setRoleIds(roleList.filter((role) => role.is_default).map((role) => role.id));
+        setProjects(projectList.items);
+        setRoles(roleList.items);
+        setScenarios(scenarioList.items);
+        setProjectId(projectList.items[0]?.id ?? "");
+        setScenarioId(scenarioList.items[0]?.id ?? "");
+        setRoleIds(roleList.items.filter((role) => role.is_default).map((role) => role.id));
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : "加载后端数据失败");
       } finally {

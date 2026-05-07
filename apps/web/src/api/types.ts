@@ -64,21 +64,6 @@ export interface SessionCreatePayload {
   supplemental_notes?: string;
 }
 
-export interface DiscussionSession {
-  id: string;
-  project_id: string;
-  scenario_id: string;
-  topic: string;
-  role_ids: string[];
-  supplemental_notes: string;
-  status: SessionStatus;
-  current_stage: string;
-  error_message: string | null;
-  created_at: string;
-  updated_at: string;
-  completed_at: string | null;
-}
-
 export interface SessionEvent {
   id: string;
   session_id: string;
@@ -101,4 +86,36 @@ export interface SessionResult {
   actions: Record<string, unknown>[];
   markdown_minutes: string;
   created_at: string;
+}
+
+export interface PaginatedResponse<T> {
+  items: T[];
+  total: number;
+  offset: number;
+  limit: number;
+}
+
+export interface SessionMetrics {
+  conclusion_convergence: number;
+  conclusion_label: string;
+  context_sufficiency: number;
+  context_label: string;
+  risk_coverage: number;
+  risk_label: string;
+}
+
+export interface DiscussionSession {
+  id: string;
+  project_id: string;
+  scenario_id: string;
+  topic: string;
+  role_ids: string[];
+  supplemental_notes: string;
+  status: SessionStatus;
+  current_stage: string;
+  error_message: string | null;
+  metrics?: SessionMetrics | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
 }

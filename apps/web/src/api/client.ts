@@ -1,6 +1,7 @@
 import type {
   AgentRole,
   DiscussionSession,
+  PaginatedResponse,
   Project,
   ScenarioTemplate,
   SessionCreatePayload,
@@ -29,7 +30,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const apiClient = {
   // Projects
-  listProjects: () => request<Project[]>("/projects"),
+  listProjects: (offset = 0, limit = 50) =>
+    request<PaginatedResponse<Project>>(`/projects?offset=${offset}&limit=${limit}`),
   createProject: (payload: Partial<Project>) =>
     request<Project>("/projects", {
       method: "POST",
@@ -40,9 +42,14 @@ export const apiClient = {
       method: "PUT",
       body: JSON.stringify(payload),
     }),
+  deleteProject: (id: string) =>
+    request<{ status: string; id: string }>(`/projects/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
 
   // Agent Roles
-  listAgentRoles: () => request<AgentRole[]>("/agent-roles"),
+  listAgentRoles: (offset = 0, limit = 50) =>
+    request<PaginatedResponse<AgentRole>>(`/agent-roles?offset=${offset}&limit=${limit}`),
   createAgentRole: (payload: Partial<AgentRole>) =>
     request<AgentRole>("/agent-roles", {
       method: "POST",
@@ -53,9 +60,14 @@ export const apiClient = {
       method: "PUT",
       body: JSON.stringify(payload),
     }),
+  deleteAgentRole: (id: string) =>
+    request<{ status: string; id: string }>(`/agent-roles/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
 
   // Scenario Templates
-  listScenarioTemplates: () => request<ScenarioTemplate[]>("/scenario-templates"),
+  listScenarioTemplates: (offset = 0, limit = 50) =>
+    request<PaginatedResponse<ScenarioTemplate>>(`/scenario-templates?offset=${offset}&limit=${limit}`),
   createScenarioTemplate: (payload: Partial<ScenarioTemplate>) =>
     request<ScenarioTemplate>("/scenario-templates", {
       method: "POST",
@@ -66,9 +78,14 @@ export const apiClient = {
       method: "PUT",
       body: JSON.stringify(payload),
     }),
+  deleteScenarioTemplate: (id: string) =>
+    request<{ status: string; id: string }>(`/scenario-templates/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
 
   // Sessions
-  listSessions: () => request<DiscussionSession[]>("/sessions"),
+  listSessions: (offset = 0, limit = 50) =>
+    request<PaginatedResponse<DiscussionSession>>(`/sessions?offset=${offset}&limit=${limit}`),
   createSession: (payload: SessionCreatePayload) =>
     request<DiscussionSession>("/sessions", {
       method: "POST",
@@ -77,4 +94,8 @@ export const apiClient = {
   getSession: (sessionId: string) => request<DiscussionSession>(`/sessions/${encodeURIComponent(sessionId)}`),
   getSessionResult: (sessionId: string) =>
     request<SessionResult>(`/sessions/${encodeURIComponent(sessionId)}/result`),
+  deleteSession: (id: string) =>
+    request<{ status: string; id: string }>(`/sessions/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
 };

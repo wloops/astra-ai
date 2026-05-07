@@ -1,9 +1,11 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, ConfigDict
 
 from astra_api.models import EventType, SessionStatus
+
+T = TypeVar("T")
 
 
 class ProjectCreate(BaseModel):
@@ -75,6 +77,35 @@ class SessionCreate(BaseModel):
     supplemental_notes: str = ""
 
 
+class SessionEventRead(BaseModel):
+    id: str
+    session_id: str
+    sequence: int
+    type: EventType
+    stage: str | None
+    role_code: str | None
+    payload: dict[str, Any]
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PaginatedResponse(BaseModel, Generic[T]):
+    items: list[T]
+    total: int
+    offset: int
+    limit: int
+
+
+class SessionMetrics(BaseModel):
+    conclusion_convergence: float
+    conclusion_label: str
+    context_sufficiency: float
+    context_label: str
+    risk_coverage: float
+    risk_label: str
+
+
 class SessionRead(BaseModel):
     id: str
     project_id: str
@@ -85,22 +116,10 @@ class SessionRead(BaseModel):
     status: SessionStatus
     current_stage: str
     error_message: str | None
+    metrics: SessionMetrics | None = None
     created_at: datetime
     updated_at: datetime
     completed_at: datetime | None
-
-    model_config = ConfigDict(from_attributes=True)
-
-
-class SessionEventRead(BaseModel):
-    id: str
-    session_id: str
-    sequence: int
-    type: EventType
-    stage: str | None
-    role_code: str | None
-    payload: dict[str, Any]
-    created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
 

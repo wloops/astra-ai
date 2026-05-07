@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Navbar } from "../components/dashboard/Navbar";
 import {
   RefreshCcw,
@@ -17,9 +18,12 @@ import {
   Bot,
   User,
   Users,
+  Trash2,
 } from "lucide-react";
 import { cn } from "../lib/utils";
 import { ErrorBanner } from "../components/common/ErrorBanner";
+import { Button } from "../../components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../components/ui/dialog";
 import { apiClient } from "../api/client";
 import type { DiscussionSession, Project, ScenarioTemplate, SessionResult } from "../api/types";
 
@@ -60,6 +64,7 @@ function getStatusBadge(status: string) {
 }
 
 export function SessionHistory() {
+  const navigate = useNavigate();
   const [sessions, setSessions] = useState<DiscussionSession[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [scenarios, setScenarios] = useState<ScenarioTemplate[]>([]);
@@ -67,6 +72,7 @@ export function SessionHistory() {
   const [sessionResult, setSessionResult] = useState<SessionResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
 
   // 搜索/过滤
   const [searchQuery, setSearchQuery] = useState("");
@@ -82,10 +88,10 @@ export function SessionHistory() {
         apiClient.listProjects(),
         apiClient.listScenarioTemplates(),
       ]);
-      setSessions(s);
-      setProjects(p);
-      setScenarios(sc);
-      if (s.length > 0) setActiveId(s[0].id);
+      setSessions(s.items);
+      setProjects(p.items);
+      setScenarios(sc.items);
+      if (s.items.length > 0) setActiveId(s.items[0].id);
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : "加载数据失败");
     } finally {
@@ -144,6 +150,44 @@ export function SessionHistory() {
     loadData();
   };
 
+  const handleDeleteSession = async () => {
+    if (!deleteTargetId) return;
+    try {
+      await apiClient.deleteSession(deleteTargetId);
+      setSessions((prev) => prev.filter((s) => s.id !== deleteTargetId));
+      if (activeId === deleteTargetId) {
+        setActiveId(null);
+        setSessionResult(null);
+      }
+    } catch (err) {
+      // 删除失败时静默处理，列表保持原状
+    } finally {
+      setDeleteTargetId(null);
+    }
+  };
+
+  const handleExport = () => {
+    const blob = new Blob([JSON.stringify(sessions, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `astra-sessions-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleCopyConfig = () => {
+    if (!activeSession) return;
+    const config = {
+      project_id: activeSession.project_id,
+      scenario_id: activeSession.scenario_id,
+      topic: activeSession.topic,
+      role_ids: activeSession.role_ids,
+      supplemental_notes: activeSession.supplemental_notes,
+    };
+    navigator.clipboard.writeText(JSON.stringify(config, null, 2)).catch(() => {});
+  };
+
   return (
     <div className="min-h-screen bg-[#F8FAFC] flex flex-col font-sans">
       <Navbar activePage="会议历史" />
@@ -168,7 +212,10 @@ export function SessionHistory() {
               <RefreshCcw className="w-4 h-4" />
               <span>刷新</span>
             </button>
-            <button className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors shadow-sm">
+            <button
+              onClick={handleExport}
+              className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors shadow-sm"
+            >
               <Download className="w-4 h-4" />
               <span>导出记录</span>
             </button>
@@ -242,7 +289,7 @@ export function SessionHistory() {
                       <th className="py-4 px-4 font-semibold w-[12%]">场景</th>
                       <th className="py-4 px-4 font-semibold w-[18%]">时间</th>
                       <th className="py-4 px-4 font-semibold w-[10%]">状态</th>
-                      <th className="py-4 px-4 font-semibold w-[5%] text-right pr-6"></th>
+                      <th className="py-4 px-4 font-semibold w-[5%] text-right pr-6">操作</th>
                     </tr>
                   </thead>
                   <tbody className="text-sm">
@@ -279,9 +326,19 @@ export function SessionHistory() {
                           </td>
                           <td className="py-4 px-4">{getStatusBadge(s.status)}</td>
                           <td className="py-4 pl-4 pr-6 text-right">
-                            <ChevronRight
-                              className={cn("w-4 h-4 transition-colors", isActive ? "text-blue-500" : "text-slate-300 group-hover:text-slate-500")}
-                            />
+                            {(s.status === "completed" || s.status === "failed") ? (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setDeleteTargetId(s.id); }}
+                                className="w-7 h-7 flex items-center justify-center rounded text-slate-300 hover:text-rose-500 hover:bg-rose-50 transition-colors"
+                                title="删除"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            ) : (
+                              <ChevronRight
+                                className={cn("w-4 h-4 transition-colors", isActive ? "text-blue-500" : "text-slate-300 group-hover:text-slate-500")}
+                              />
+                            )}
                           </td>
                         </tr>
                       );
@@ -432,27 +489,56 @@ export function SessionHistory() {
 
                 {/* Footer Actions */}
                 <div className="p-4 border-t border-slate-100 bg-slate-50/50 flex items-center justify-between rounded-b-xl gap-3">
-                  <button className="flex-1 flex items-center justify-center gap-2 px-4 h-10 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 hover:text-blue-600 transition-colors shadow-sm">
+                  <button
+                    onClick={() => navigate(`/session-result?sessionId=${activeSession.id}`)}
+                    className="flex-1 flex items-center justify-center gap-2 px-4 h-10 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 hover:text-blue-600 transition-colors shadow-sm"
+                  >
                     <FileText className="w-4 h-4 text-blue-500" />
                     <span>查看纪要</span>
                   </button>
-                  <button className="flex-1 flex items-center justify-center gap-2 px-4 h-10 bg-blue-600 rounded-lg text-sm font-medium text-white hover:bg-blue-700 transition-colors shadow-sm">
+                  <button
+                    onClick={() => navigate(`/start-session?projectId=${activeSession.project_id}&scenarioId=${activeSession.scenario_id}`)}
+                    className="flex-1 flex items-center justify-center gap-2 px-4 h-10 bg-blue-600 rounded-lg text-sm font-medium text-white hover:bg-blue-700 transition-colors shadow-sm"
+                  >
                     <Play className="w-4 h-4 fill-white" />
                     <span>再次发起</span>
                   </button>
-                  <button className="flex-1 flex items-center justify-center px-4 h-10 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 hover:text-blue-600 transition-colors shadow-sm">
+                  <button
+                    onClick={handleCopyConfig}
+                    className="flex-1 flex items-center justify-center px-4 h-10 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 hover:text-blue-600 transition-colors shadow-sm"
+                  >
                     <Copy className="w-4 h-4 text-blue-500 mr-2" />
                     <span>复制配置</span>
                   </button>
-                  <button className="w-10 h-10 flex border shrink-0 items-center justify-center bg-white border-slate-200 rounded-lg text-slate-500 hover:bg-slate-50 hover:text-slate-700 transition-colors shadow-sm">
-                    <MoreHorizontal className="w-4 h-4" />
-                  </button>
+                  {(activeSession.status === "completed" || activeSession.status === "failed") && (
+                    <button
+                      onClick={() => setDeleteTargetId(activeSession.id)}
+                      className="w-10 h-10 flex border shrink-0 items-center justify-center bg-white border-slate-200 rounded-lg text-slate-500 hover:bg-rose-50 hover:text-rose-500 transition-colors shadow-sm"
+                      title="删除此会话"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
                 </div>
               </>
             )}
           </div>
         </div>
       </main>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={deleteTargetId !== null} onOpenChange={(open) => { if (!open) setDeleteTargetId(null); }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>确认删除</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-slate-600">此操作将同时删除该会话关联的所有事件和结果数据，不可撤销。</p>
+          <div className="flex justify-end gap-3 mt-4">
+            <Button variant="outline" onClick={() => setDeleteTargetId(null)}>取消</Button>
+            <Button variant="destructive" onClick={handleDeleteSession}>确认删除</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

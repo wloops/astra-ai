@@ -11,6 +11,7 @@ import {
   Info,
   PenSquare,
   Target,
+  Trash2,
   Wrench,
   ArrowRightCircle,
   Users2,
@@ -154,13 +155,28 @@ export function RoleConfig() {
   const [activeScene, setActiveScene] = useState<SceneDisplay | null>(null);
   const [showNewRole, setShowNewRole] = useState(false);
 
+  // Delete state
+  const [deleteRoleTarget, setDeleteRoleTarget] = useState<AgentRole | null>(null);
+  const [deleteSceneTarget, setDeleteSceneTarget] = useState<ScenarioTemplate | null>(null);
+
+  // Scene edit state
+  const [showNewScene, setShowNewScene] = useState(false);
+  const [showEditScene, setShowEditScene] = useState(false);
+  const [editSceneId, setEditSceneId] = useState<string | null>(null);
+  const [editSceneForm, setEditSceneForm] = useState({
+    name: "", code: "", description: "", stages: "", default_role_codes: "", output_schema: "", recommended_tools: "",
+  });
+  const [newSceneForm, setNewSceneForm] = useState({
+    name: "", code: "", description: "", stages: "", default_role_codes: "", output_schema: "", recommended_tools: "",
+  });
+
   const loadData = () => {
     setLoading(true);
     setLoadError(null);
     Promise.all([apiClient.listAgentRoles(), apiClient.listScenarioTemplates()])
       .then(([r, s]) => {
-        setRoles(r);
-        setScenes(s);
+        setRoles(r.items);
+        setScenes(s.items);
       })
       .catch((err) => setLoadError(err instanceof Error ? err.message : "加载数据失败"))
       .finally(() => setLoading(false));
@@ -247,6 +263,88 @@ export function RoleConfig() {
       setShowNewRole(false);
     } catch (err) {
       setCreateError(err instanceof Error ? err.message : "创建角色失败，请重试");
+    }
+  };
+
+  const handleDeleteRole = async () => {
+    if (!deleteRoleTarget) return;
+    try {
+      await apiClient.deleteAgentRole(deleteRoleTarget.id);
+      setRoles((prev) => prev.filter((r) => r.id !== deleteRoleTarget.id));
+      if (activeRole?.id === deleteRoleTarget.id) setActiveRole(null);
+    } catch {
+      // 静默处理
+    } finally {
+      setDeleteRoleTarget(null);
+    }
+  };
+
+  const handleDeleteScene = async () => {
+    if (!deleteSceneTarget) return;
+    try {
+      await apiClient.deleteScenarioTemplate(deleteSceneTarget.id);
+      setScenes((prev) => prev.filter((s) => s.id !== deleteSceneTarget.id));
+      if (activeScene?.id === deleteSceneTarget.id) setActiveScene(null);
+    } catch {
+      // 静默处理
+    } finally {
+      setDeleteSceneTarget(null);
+    }
+  };
+
+  const openEditScene = (scene: ScenarioTemplate) => {
+    setEditSceneId(scene.id);
+    setEditSceneForm({
+      name: scene.name,
+      code: scene.code,
+      description: scene.description ?? "",
+      stages: (scene.stages ?? []).join("，"),
+      default_role_codes: (scene.default_role_codes ?? []).join("，"),
+      output_schema: (scene.output_schema ?? []).join("，"),
+      recommended_tools: (scene.recommended_tools ?? []).join("，"),
+    });
+    setEditError(null);
+    setShowEditScene(true);
+  };
+
+  const handleUpdateScene = async () => {
+    if (!editSceneId || !editSceneForm.name.trim() || !editSceneForm.code.trim()) return;
+    setEditError(null);
+    try {
+      const updated = await apiClient.updateScenarioTemplate(editSceneId, {
+        name: editSceneForm.name,
+        code: editSceneForm.code,
+        description: editSceneForm.description,
+        stages: editSceneForm.stages.split(/[,，]/).filter(Boolean),
+        default_role_codes: editSceneForm.default_role_codes.split(/[,，]/).filter(Boolean),
+        output_schema: editSceneForm.output_schema.split(/[,，]/).filter(Boolean),
+        recommended_tools: editSceneForm.recommended_tools.split(/[,，]/).filter(Boolean),
+      });
+      setScenes((prev) => prev.map((s) => (s.id === editSceneId ? updated : s)));
+      setShowEditScene(false);
+    } catch (err) {
+      setEditError(err instanceof Error ? err.message : "更新场景模板失败");
+    }
+  };
+
+  const handleCreateScene = async () => {
+    if (!newSceneForm.name.trim() || !newSceneForm.code.trim()) return;
+    setCreateError(null);
+    try {
+      const created = await apiClient.createScenarioTemplate({
+        name: newSceneForm.name,
+        code: newSceneForm.code,
+        description: newSceneForm.description,
+        stages: newSceneForm.stages.split(/[,，]/).filter(Boolean),
+        default_role_codes: newSceneForm.default_role_codes.split(/[,，]/).filter(Boolean),
+        output_schema: newSceneForm.output_schema.split(/[,，]/).filter(Boolean),
+        recommended_tools: newSceneForm.recommended_tools.split(/[,，]/).filter(Boolean),
+      });
+      setScenes((prev) => [...prev, created]);
+      setNewSceneForm({ name: "", code: "", description: "", stages: "", default_role_codes: "", output_schema: "", recommended_tools: "" });
+      setShowNewScene(false);
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : "创建场景模板失败");
     }
   };
 
@@ -342,6 +440,13 @@ export function RoleConfig() {
                             {role.desc}
                           </p>
                         </div>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); const r = roles.find((x) => x.id === role.id); if (r) setDeleteRoleTarget(r); }}
+                          className="text-slate-300 hover:text-rose-500 transition-colors p-1 shrink-0"
+                          title="删除角色"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       </div>
                     </div>
                   ))
@@ -351,7 +456,18 @@ export function RoleConfig() {
           )}
 
           {tab === "scenes" && (
-            <div className="flex-1 overflow-y-auto pr-2 pb-6 space-y-3">
+            <>
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-sm font-bold text-slate-900">全部场景</h2>
+                <button
+                  onClick={() => setShowNewScene(true)}
+                  className="flex items-center gap-1 text-blue-600 hover:text-blue-700 text-xs font-medium px-2.5 py-1.5 rounded-full border border-blue-100 bg-white hover:bg-blue-50 transition-colors"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  新建场景
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto pr-2 pb-6 space-y-3">
               {sceneDisplays.length === 0 ? (
                 <div className="text-slate-400 text-sm text-center py-8">暂无场景模板</div>
               ) : (
@@ -368,7 +484,7 @@ export function RoleConfig() {
                       <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center text-white shadow-sm", scene.color)}>
                         <scene.icon className="w-5 h-5" />
                       </div>
-                      <div>
+                      <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
                           <h3 className="font-medium text-[14px] text-slate-900">{scene.name}</h3>
                           {scene.isBuiltIn && (
@@ -377,11 +493,19 @@ export function RoleConfig() {
                         </div>
                         <p className="text-xs text-slate-500 line-clamp-1 mt-0.5">{scene.desc}</p>
                       </div>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); const s = scenes.find((x) => x.id === scene.id); if (s) setDeleteSceneTarget(s); }}
+                        className="text-slate-300 hover:text-rose-500 transition-colors p-1 shrink-0"
+                        title="删除场景"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
                     </div>
                   </div>
                 ))
               )}
             </div>
+            </>
           )}
         </aside>
 
@@ -483,11 +607,30 @@ export function RoleConfig() {
                     <p className="text-slate-500 text-[14px]">{activeScene.desc}</p>
                   </div>
                 </div>
+                <button
+                  onClick={() => {
+                    const original = scenes.find((s) => s.id === activeScene.id);
+                    if (original) openEditScene(original);
+                  }}
+                  className="flex items-center gap-1.5 text-slate-700 hover:text-slate-900 bg-white border border-slate-200 hover:bg-slate-50 px-3.5 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm"
+                >
+                  <PenSquare className="w-4 h-4" />
+                  编辑场景模板
+                </button>
               </div>
 
               <div className="space-y-5">
-                <div className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
-                  <h3 className="font-semibold text-slate-900 mb-4">默认角色</h3>
+                <DetailCard title="阶段流程" icon={LayoutTemplate}>
+                  <div className="flex flex-wrap gap-2">
+                    {(scenes.find((s) => s.id === activeScene.id)?.stages ?? []).length > 0
+                      ? (scenes.find((s) => s.id === activeScene.id)?.stages ?? []).map((stage, i) => (
+                          <span key={i} className="px-3 py-1.5 bg-slate-100 text-slate-700 text-sm rounded-lg">{stage}</span>
+                        ))
+                      : <span className="text-slate-500 text-sm">暂无阶段</span>}
+                  </div>
+                </DetailCard>
+
+                <DetailCard title="默认角色" icon={Users2}>
                   <div className="flex flex-wrap gap-3">
                     {activeScene.roleCodes.map((code, i) => {
                       const role = roleDisplays.find((r) => r.id === code || roles.find((x) => x.code === code)?.id === r.id);
@@ -500,7 +643,27 @@ export function RoleConfig() {
                       );
                     })}
                   </div>
-                </div>
+                </DetailCard>
+
+                <DetailCard title="输出 Schema" icon={FileText}>
+                  <div className="flex flex-wrap gap-2">
+                    {(scenes.find((s) => s.id === activeScene.id)?.output_schema ?? []).length > 0
+                      ? (scenes.find((s) => s.id === activeScene.id)?.output_schema ?? []).map((item, i) => (
+                          <span key={i} className="px-3 py-1.5 bg-blue-50 text-blue-600 text-sm rounded-lg">{item}</span>
+                        ))
+                      : <span className="text-slate-500 text-sm">暂无</span>}
+                  </div>
+                </DetailCard>
+
+                <DetailCard title="推荐工具" icon={Wrench}>
+                  <div className="flex flex-wrap gap-2">
+                    {(scenes.find((s) => s.id === activeScene.id)?.recommended_tools ?? []).length > 0
+                      ? (scenes.find((s) => s.id === activeScene.id)?.recommended_tools ?? []).map((tool, i) => (
+                          <span key={i} className="px-3 py-1.5 bg-slate-100 text-slate-700 text-sm rounded-lg">{tool}</span>
+                        ))
+                      : <span className="text-slate-500 text-sm">暂无</span>}
+                  </div>
+                </DetailCard>
               </div>
             </div>
           ) : (
@@ -661,6 +824,124 @@ export function RoleConfig() {
             <div className="flex justify-end gap-3 mt-6">
               <Button variant="outline" onClick={() => setShowEditRole(false)}>取消</Button>
               <Button onClick={handleUpdateRole} disabled={!editRoleForm.name.trim() || !editRoleForm.code.trim()}>保存</Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* New Scene Dialog */}
+        {showNewScene && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
+            <div className="bg-white rounded-2xl p-6 w-full max-w-lg shadow-xl max-h-[90vh] overflow-y-auto">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-bold text-slate-900">新建场景模板</h2>
+                <button onClick={() => setShowNewScene(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+              </div>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">名称 *</label>
+                  <input type="text" value={newSceneForm.name} onChange={(e) => setNewSceneForm((f) => ({ ...f, name: e.target.value }))} className="w-full h-10 px-3 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="如：需求澄清" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">代号 *</label>
+                  <input type="text" value={newSceneForm.code} onChange={(e) => setNewSceneForm((f) => ({ ...f, code: e.target.value }))} className="w-full h-10 px-3 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="如：requirements_clarification" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">描述</label>
+                  <textarea value={newSceneForm.description} onChange={(e) => setNewSceneForm((f) => ({ ...f, description: e.target.value }))} className="w-full h-16 px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" placeholder="场景简要描述" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">阶段（逗号分隔）</label>
+                  <input type="text" value={newSceneForm.stages} onChange={(e) => setNewSceneForm((f) => ({ ...f, stages: e.target.value }))} className="w-full h-10 px-3 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="如：议题澄清, 独立评审, 交叉辩论" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">默认角色代号（逗号分隔）</label>
+                  <input type="text" value={newSceneForm.default_role_codes} onChange={(e) => setNewSceneForm((f) => ({ ...f, default_role_codes: e.target.value }))} className="w-full h-10 px-3 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="如：host, product_manager" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">输出 Schema（逗号分隔）</label>
+                  <input type="text" value={newSceneForm.output_schema} onChange={(e) => setNewSceneForm((f) => ({ ...f, output_schema: e.target.value }))} className="w-full h-10 px-3 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="如：结论, 争议, 风险" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">推荐工具（逗号分隔）</label>
+                  <input type="text" value={newSceneForm.recommended_tools} onChange={(e) => setNewSceneForm((f) => ({ ...f, recommended_tools: e.target.value }))} className="w-full h-10 px-3 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="如：知识检索, 投票决策" />
+                </div>
+              </div>
+              <div className="flex justify-end gap-3 mt-6">
+                <button onClick={() => setShowNewScene(false)} className="px-4 py-2 border border-slate-200 rounded-lg text-sm text-slate-600 hover:bg-slate-50">取消</button>
+                <button onClick={handleCreateScene} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700" disabled={!newSceneForm.name.trim() || !newSceneForm.code.trim()}>创建</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Edit Scene Dialog */}
+        <Dialog open={showEditScene} onOpenChange={setShowEditScene}>
+          <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>编辑场景模板</DialogTitle>
+            </DialogHeader>
+            {editError && <ErrorBanner message={editError} onDismiss={() => setEditError(null)} />}
+            <div className="space-y-4 mt-4">
+              <div className="grid gap-2">
+                <Label htmlFor="edit-scene-name">名称 *</Label>
+                <Input id="edit-scene-name" value={editSceneForm.name} onChange={(e) => setEditSceneForm((f) => ({ ...f, name: e.target.value }))} placeholder="如：需求澄清" />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="edit-scene-code">代号 *</Label>
+                <Input id="edit-scene-code" value={editSceneForm.code} onChange={(e) => setEditSceneForm((f) => ({ ...f, code: e.target.value }))} placeholder="如：requirements_clarification" />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="edit-scene-desc">描述</Label>
+                <Textarea id="edit-scene-desc" value={editSceneForm.description} onChange={(e) => setEditSceneForm((f) => ({ ...f, description: e.target.value }))} placeholder="场景简要描述" rows={2} />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="edit-scene-stages">阶段（逗号分隔）</Label>
+                <Input id="edit-scene-stages" value={editSceneForm.stages} onChange={(e) => setEditSceneForm((f) => ({ ...f, stages: e.target.value }))} placeholder="如：议题澄清, 独立评审" />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="edit-scene-roles">默认角色代号（逗号分隔）</Label>
+                <Input id="edit-scene-roles" value={editSceneForm.default_role_codes} onChange={(e) => setEditSceneForm((f) => ({ ...f, default_role_codes: e.target.value }))} placeholder="如：host, product_manager" />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="edit-scene-schema">输出 Schema（逗号分隔）</Label>
+                <Input id="edit-scene-schema" value={editSceneForm.output_schema} onChange={(e) => setEditSceneForm((f) => ({ ...f, output_schema: e.target.value }))} placeholder="如：结论, 争议, 风险" />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="edit-scene-tools">推荐工具（逗号分隔）</Label>
+                <Input id="edit-scene-tools" value={editSceneForm.recommended_tools} onChange={(e) => setEditSceneForm((f) => ({ ...f, recommended_tools: e.target.value }))} placeholder="如：知识检索, 投票决策" />
+              </div>
+            </div>
+            <div className="flex justify-end gap-3 mt-6">
+              <Button variant="outline" onClick={() => setShowEditScene(false)}>取消</Button>
+              <Button onClick={handleUpdateScene} disabled={!editSceneForm.name.trim() || !editSceneForm.code.trim()}>保存</Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* Delete Role Confirmation */}
+        <Dialog open={deleteRoleTarget !== null} onOpenChange={(open) => { if (!open) setDeleteRoleTarget(null); }}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>确认删除角色</DialogTitle>
+            </DialogHeader>
+            <p className="text-sm text-slate-600">确定要删除角色「{deleteRoleTarget?.name}」吗？此操作不可撤销。</p>
+            <div className="flex justify-end gap-3 mt-4">
+              <Button variant="outline" onClick={() => setDeleteRoleTarget(null)}>取消</Button>
+              <Button variant="destructive" onClick={handleDeleteRole}>确认删除</Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* Delete Scene Confirmation */}
+        <Dialog open={deleteSceneTarget !== null} onOpenChange={(open) => { if (!open) setDeleteSceneTarget(null); }}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>确认删除场景模板</DialogTitle>
+            </DialogHeader>
+            <p className="text-sm text-slate-600">确定要删除场景模板「{deleteSceneTarget?.name}」吗？此操作不可撤销。</p>
+            <div className="flex justify-end gap-3 mt-4">
+              <Button variant="outline" onClick={() => setDeleteSceneTarget(null)}>取消</Button>
+              <Button variant="destructive" onClick={handleDeleteScene}>确认删除</Button>
             </div>
           </DialogContent>
         </Dialog>

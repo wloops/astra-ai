@@ -26,8 +26,8 @@ export function Dashboard() {
         apiClient.listProjects(),
         apiClient.listSessions(),
       ]);
-      setProjects(p);
-      setSessions(s);
+      setProjects(p.items);
+      setSessions(s.items);
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : "加载数据失败");
     } finally {
