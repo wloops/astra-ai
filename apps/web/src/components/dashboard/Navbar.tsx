@@ -1,7 +1,8 @@
 import React, { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Search, Bell, ChevronDown, LayoutGrid, FileText, History, Users, Menu, X, KanbanSquare } from 'lucide-react'
+import { Search, Bell, LogOut, LayoutGrid, FileText, History, Users, Menu, X, KanbanSquare } from 'lucide-react'
 import { cn } from '../../lib/utils'
+import { useAuth } from '../../contexts/AuthContext'
 
 interface NavbarProps {
   activePage?: string
@@ -9,6 +10,7 @@ interface NavbarProps {
 
 export function Navbar({ activePage = '工作台' }: NavbarProps) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const { user, logout } = useAuth()
 
   const navItems = [
     { name: '工作台', icon: LayoutGrid, path: '/dashboard' },
@@ -65,10 +67,12 @@ export function Navbar({ activePage = '工作台' }: NavbarProps) {
           <Bell className="w-5 h-5" />
           <span className="absolute -top-0.5 -right-0.5 w-3.5 h-3.5 bg-red-500 text-[10px] text-white flex items-center justify-center rounded-full border-2 border-white font-medium">3</span>
         </button>
-        <div className="flex items-center gap-2 cursor-pointer ml-2 hover:bg-slate-50 py-1 pl-1 pr-2 rounded-full transition-colors border border-transparent hover:border-slate-200">
+        <div className="flex items-center gap-2 ml-2 py-1 pl-1 pr-2 rounded-full border border-slate-200">
           <img src="https://api.dicebear.com/7.x/notionists/svg?seed=Felix&backgroundColor=e2e8f0" alt="User" className="w-8 h-8 rounded-full border border-slate-200 bg-slate-100" />
-          <span className="text-sm font-medium text-slate-700">wlait</span>
-          <ChevronDown className="w-4 h-4 text-slate-500" />
+          <span className="text-sm font-medium text-slate-700">{user?.username ?? "用户"}</span>
+          <button onClick={logout} className="rounded-full p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-900" aria-label="退出登录">
+            <LogOut className="w-4 h-4" />
+          </button>
         </div>
       </div>
 
@@ -120,6 +124,19 @@ export function Navbar({ activePage = '工作台' }: NavbarProps) {
                 })}
               </div>
               <div className="mt-6 pt-6 border-t border-slate-100">
+                <div className="mb-4 flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2">
+                  <span className="text-sm font-medium text-slate-700">{user?.username ?? "用户"}</span>
+                  <button
+                    onClick={() => {
+                      logout()
+                      setMobileMenuOpen(false)
+                    }}
+                    className="inline-flex items-center gap-1 text-sm text-slate-600"
+                  >
+                    <LogOut className="w-4 h-4" />
+                    退出
+                  </button>
+                </div>
                 <div className="relative">
                   <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                   <input

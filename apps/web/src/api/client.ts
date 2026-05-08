@@ -1,5 +1,6 @@
 import type {
   AgentRole,
+  AuthPayload,
   DiscussionSession,
   PaginatedResponse,
   Project,
@@ -12,15 +13,34 @@ import type {
   TaskPriority,
   TaskStatus,
   TaskUpdatePayload,
+  TokenResponse,
+  User,
 } from "./types";
 
 export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8010").replace(/\/$/, "");
 export const API_KEY = (import.meta.env.VITE_API_KEY ?? "").trim();
+export const AUTH_TOKEN_KEY = "astra_auth_token";
+
+export function getAuthToken(): string {
+  if (typeof localStorage === "undefined") return "";
+  return localStorage.getItem(AUTH_TOKEN_KEY) ?? "";
+}
+
+export function setAuthToken(token: string): void {
+  localStorage.setItem(AUTH_TOKEN_KEY, token);
+}
+
+export function clearAuthToken(): void {
+  localStorage.removeItem(AUTH_TOKEN_KEY);
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   headers.set("Content-Type", "application/json");
-  if (API_KEY) {
+  const token = getAuthToken();
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  } else if (API_KEY) {
     headers.set("X-API-Key", API_KEY);
   }
 
@@ -39,6 +59,18 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const apiClient = {
+  // Auth
+  register: (payload: AuthPayload) =>
+    request<User>("/auth/register", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  login: (payload: AuthPayload) =>
+    request<TokenResponse>("/auth/login", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
   // Projects
   listProjects: (offset = 0, limit = 50) =>
     request<PaginatedResponse<Project>>(`/projects?offset=${offset}&limit=${limit}`),

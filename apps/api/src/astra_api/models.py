@@ -50,6 +50,14 @@ class TaskPriority(StrEnum):
     CRITICAL = "critical"
 
 
+class User(SQLModel, table=True):
+    id: str = Field(default_factory=lambda: new_id("user"), primary_key=True)
+    username: str = Field(index=True, unique=True)
+    hashed_password: str
+    created_at: datetime = Field(default_factory=utc_now)
+    last_login_at: datetime | None = None
+
+
 class ProjectBase(SQLModel):
     name: str
     description: str = ""
@@ -66,6 +74,7 @@ class ProjectBase(SQLModel):
 
 class Project(ProjectBase, table=True):
     id: str = Field(default_factory=lambda: new_id("proj"), primary_key=True)
+    user_id: str | None = Field(default=None, index=True)
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 
@@ -115,6 +124,7 @@ class DiscussionSessionBase(SQLModel):
 
 class DiscussionSession(DiscussionSessionBase, table=True):
     id: str = Field(default_factory=lambda: new_id("session"), primary_key=True)
+    user_id: str | None = Field(default=None, index=True)
     status: SessionStatus = Field(default=SessionStatus.PENDING, index=True)
     current_stage: str = ""
     error_message: str | None = None
@@ -161,6 +171,7 @@ class TaskBase(SQLModel):
 
 class Task(TaskBase, table=True):
     id: str = Field(default_factory=lambda: new_id("task"), primary_key=True)
+    user_id: str | None = Field(default=None, index=True)
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
     completed_at: datetime | None = None

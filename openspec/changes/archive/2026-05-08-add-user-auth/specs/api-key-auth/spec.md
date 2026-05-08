@@ -1,10 +1,10 @@
-# api-key-auth Specification
+# api-key-auth Specification (Delta)
 
 ## Purpose
 
-基于 JWT Bearer Token 优先 + `X-API-Key` fallback 的全局 API 鉴权机制，为所有 REST 端点提供防护，并为未来用户认证系统预留替换接口。
+扩展现有 API Key 鉴权机制，使其与 JWT Bearer Token 共存：JWT 优先，API Key 作为 fallback。
 
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: 全局 API Key 鉴权
 

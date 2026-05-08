@@ -131,6 +131,23 @@ export interface PromoteResponse {
   skipped_actions: Record<string, unknown>[];
 }
 
+export interface User {
+  id: string;
+  username: string;
+  created_at: string;
+  last_login_at: string | null;
+}
+
+export interface AuthPayload {
+  username: string;
+  password: string;
+}
+
+export interface TokenResponse {
+  access_token: string;
+  token_type: "bearer";
+}
+
 export interface PaginatedResponse<T> {
   items: T[];
   total: number;

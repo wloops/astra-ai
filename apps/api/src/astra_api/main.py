@@ -3,7 +3,7 @@ import json
 from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
 
-from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from slowapi import Limiter
@@ -17,6 +17,15 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from astra_api.config import settings
 from astra_api.db import get_session, init_db
+from astra_api.auth import (
+    ADMIN_USERNAME,
+    admin_login_password,
+    create_access_token,
+    get_current_user,
+    hash_password,
+    is_admin_user,
+    verify_password,
+)
 from astra_api.models import (
     AgentRole,
     DiscussionSession,
@@ -28,6 +37,7 @@ from astra_api.models import (
     Task,
     TaskPriority,
     TaskStatus,
+    User,
     utc_now,
 )
 from astra_api.orchestrator import run_session_workflow
@@ -49,6 +59,9 @@ from astra_api.schemas import (
     TaskCreate,
     TaskRead,
     TaskUpdate,
+    TokenResponse,
+    UserCreate,
+    UserRead,
 )
 from astra_api.seed import seed_defaults
 
@@ -66,20 +79,6 @@ def _parse_cors_origins(raw_origins: str) -> list[str]:
 
     origins = [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
     return origins or ["*"]
-
-
-def verify_api_key(
-    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
-    api_key: str | None = Query(default=None),
-) -> None:
-    """Use one replaceable dependency for current API key auth and future auth upgrades."""
-
-    expected_key = settings.api_key.strip()
-    if not expected_key:
-        return
-    supplied_key = x_api_key or api_key
-    if supplied_key != expected_key:
-        raise HTTPException(status_code=401, detail="Invalid API key")
 
 
 class SecurityHeadersMiddleware:
@@ -145,7 +144,7 @@ if settings.rate_limit_enabled:
     app.add_middleware(SlowAPIMiddleware)
 
 
-api_router = APIRouter(dependencies=[Depends(verify_api_key)])
+api_router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
 @app.get("/health")
@@ -154,22 +153,60 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.post("/auth/register", response_model=UserRead)
+def register_user(payload: UserCreate, session: Session = Depends(get_session)) -> User:
+    existing = session.exec(select(User).where(User.username == payload.username)).first()
+    if existing is not None:
+        raise HTTPException(status_code=409, detail="Username already exists")
+    user = User(username=payload.username, hashed_password=hash_password(payload.password))
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+    return user
+
+
+@app.post("/auth/login", response_model=TokenResponse)
+def login_user(payload: UserCreate, session: Session = Depends(get_session)) -> dict:
+    user = session.exec(select(User).where(User.username == payload.username)).first()
+    if user is not None and user.username == ADMIN_USERNAME and not admin_login_password():
+        # 默认 admin 仅作为 API Key fallback 和历史数据归属使用，避免公开登录端点绕过 API Key。
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    if user is None or not verify_password(payload.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    user.last_login_at = utc_now()
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+    return {"access_token": create_access_token(user), "token_type": "bearer"}
+
+
+def require_admin_user(current_user: User) -> None:
+    if not is_admin_user(current_user):
+        raise HTTPException(status_code=403, detail="Admin privileges required")
+
+
 @api_router.get("/projects", response_model=PaginatedResponse[ProjectRead])
 def list_projects(
     offset: int = 0,
     limit: int = 50,
     session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
 ) -> dict:
-    total = session.exec(select(Project)).all()
+    statement = select(Project).where(Project.user_id == current_user.id)
+    total = session.exec(statement).all()
     items = session.exec(
-        select(Project).order_by(Project.updated_at.desc()).offset(offset).limit(limit)
+        statement.order_by(Project.updated_at.desc()).offset(offset).limit(limit)
     ).all()
     return {"items": items, "total": len(total), "offset": offset, "limit": limit}
 
 
 @api_router.post("/projects", response_model=ProjectRead)
-def create_project(payload: ProjectCreate, session: Session = Depends(get_session)) -> Project:
-    project = Project(**payload.model_dump())
+def create_project(
+    payload: ProjectCreate,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> Project:
+    project = Project(**payload.model_dump(), user_id=current_user.id)
     session.add(project)
     session.commit()
     session.refresh(project)
@@ -177,9 +214,14 @@ def create_project(payload: ProjectCreate, session: Session = Depends(get_sessio
 
 
 @api_router.put("/projects/{project_id}", response_model=ProjectRead)
-def update_project(project_id: str, payload: ProjectCreate, session: Session = Depends(get_session)) -> Project:
+def update_project(
+    project_id: str,
+    payload: ProjectCreate,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> Project:
     project = session.get(Project, project_id)
-    if project is None:
+    if project is None or project.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Project not found")
     for key, value in payload.model_dump().items():
         setattr(project, key, value)
@@ -190,9 +232,13 @@ def update_project(project_id: str, payload: ProjectCreate, session: Session = D
 
 
 @api_router.delete("/projects/{project_id}")
-def delete_project(project_id: str, session: Session = Depends(get_session)) -> dict:
+def delete_project(
+    project_id: str,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> dict:
     project = session.get(Project, project_id)
-    if project is None:
+    if project is None or project.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Project not found")
     session.delete(project)
     session.commit()
@@ -213,7 +259,12 @@ def list_agent_roles(
 
 
 @api_router.post("/agent-roles", response_model=AgentRoleRead)
-def create_agent_role(payload: AgentRoleCreate, session: Session = Depends(get_session)) -> AgentRole:
+def create_agent_role(
+    payload: AgentRoleCreate,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> AgentRole:
+    require_admin_user(current_user)
     role = AgentRole(**payload.model_dump())
     session.add(role)
     session.commit()
@@ -222,7 +273,13 @@ def create_agent_role(payload: AgentRoleCreate, session: Session = Depends(get_s
 
 
 @api_router.put("/agent-roles/{role_id}", response_model=AgentRoleRead)
-def update_agent_role(role_id: str, payload: AgentRoleCreate, session: Session = Depends(get_session)) -> AgentRole:
+def update_agent_role(
+    role_id: str,
+    payload: AgentRoleCreate,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> AgentRole:
+    require_admin_user(current_user)
     role = session.get(AgentRole, role_id)
     if role is None:
         raise HTTPException(status_code=404, detail="AgentRole not found")
@@ -235,7 +292,12 @@ def update_agent_role(role_id: str, payload: AgentRoleCreate, session: Session =
 
 
 @api_router.delete("/agent-roles/{role_id}")
-def delete_agent_role(role_id: str, session: Session = Depends(get_session)) -> dict:
+def delete_agent_role(
+    role_id: str,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    require_admin_user(current_user)
     role = session.get(AgentRole, role_id)
     if role is None:
         raise HTTPException(status_code=404, detail="AgentRole not found")
@@ -258,7 +320,12 @@ def list_scenario_templates(
 
 
 @api_router.post("/scenario-templates", response_model=ScenarioTemplateRead)
-def create_scenario_template(payload: ScenarioTemplateCreate, session: Session = Depends(get_session)) -> ScenarioTemplate:
+def create_scenario_template(
+    payload: ScenarioTemplateCreate,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> ScenarioTemplate:
+    require_admin_user(current_user)
     scenario = ScenarioTemplate(**payload.model_dump())
     session.add(scenario)
     session.commit()
@@ -267,7 +334,13 @@ def create_scenario_template(payload: ScenarioTemplateCreate, session: Session =
 
 
 @api_router.put("/scenario-templates/{scenario_id}", response_model=ScenarioTemplateRead)
-def update_scenario_template(scenario_id: str, payload: ScenarioTemplateCreate, session: Session = Depends(get_session)) -> ScenarioTemplate:
+def update_scenario_template(
+    scenario_id: str,
+    payload: ScenarioTemplateCreate,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> ScenarioTemplate:
+    require_admin_user(current_user)
     tmpl = session.get(ScenarioTemplate, scenario_id)
     if tmpl is None:
         raise HTTPException(status_code=404, detail="ScenarioTemplate not found")
@@ -280,7 +353,12 @@ def update_scenario_template(scenario_id: str, payload: ScenarioTemplateCreate, 
 
 
 @api_router.delete("/scenario-templates/{scenario_id}")
-def delete_scenario_template(scenario_id: str, session: Session = Depends(get_session)) -> dict:
+def delete_scenario_template(
+    scenario_id: str,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    require_admin_user(current_user)
     tmpl = session.get(ScenarioTemplate, scenario_id)
     if tmpl is None:
         raise HTTPException(status_code=404, detail="ScenarioTemplate not found")
@@ -297,11 +375,13 @@ def create_discussion_session(
     payload: SessionCreate,
     background_tasks: BackgroundTasks,
     session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
 ) -> DiscussionSession:
     # slowapi needs Request and Response for decorated handlers; business logic does not use them.
     _ = request
     _ = response
-    if session.get(Project, payload.project_id) is None:
+    project = session.get(Project, payload.project_id)
+    if project is None or project.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Project not found")
     scenario = session.get(ScenarioTemplate, payload.scenario_id)
     if scenario is None:
@@ -310,7 +390,7 @@ def create_discussion_session(
     if not role_ids:
         roles = session.exec(select(AgentRole).where(AgentRole.code.in_(scenario.default_role_codes))).all()
         role_ids = [role.id for role in roles]
-    discussion = DiscussionSession(**payload.model_dump(exclude={"role_ids"}), role_ids=role_ids)
+    discussion = DiscussionSession(**payload.model_dump(exclude={"role_ids"}), role_ids=role_ids, user_id=current_user.id)
     session.add(discussion)
     session.commit()
     session.refresh(discussion)
@@ -323,21 +403,28 @@ def list_discussion_sessions(
     offset: int = 0,
     limit: int = 50,
     session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
 ) -> dict:
-    total = session.exec(select(DiscussionSession)).all()
+    statement = select(DiscussionSession).where(DiscussionSession.user_id == current_user.id)
+    total = session.exec(statement).all()
     items = session.exec(
-        select(DiscussionSession).order_by(DiscussionSession.created_at.desc()).offset(offset).limit(limit)
+        statement.order_by(DiscussionSession.created_at.desc()).offset(offset).limit(limit)
     ).all()
     return {"items": items, "total": len(total), "offset": offset, "limit": limit}
 
 
 @api_router.get("/sessions/{session_id}", response_model=SessionRead)
-def get_discussion_session(session_id: str, session: Session = Depends(get_session)) -> dict:
+def get_discussion_session(
+    session_id: str,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> dict:
     discussion = session.get(DiscussionSession, session_id)
-    if discussion is None:
+    if discussion is None or discussion.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Session not found")
     result = {
         "id": discussion.id,
+        "user_id": discussion.user_id,
         "project_id": discussion.project_id,
         "scenario_id": discussion.scenario_id,
         "topic": discussion.topic,
@@ -361,9 +448,13 @@ def get_discussion_session(session_id: str, session: Session = Depends(get_sessi
 
 
 @api_router.delete("/sessions/{session_id}")
-def delete_discussion_session(session_id: str, session: Session = Depends(get_session)) -> dict:
+def delete_discussion_session(
+    session_id: str,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> dict:
     discussion = session.get(DiscussionSession, session_id)
-    if discussion is None:
+    if discussion is None or discussion.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Session not found")
     # 级联删除关联事件
     for event in session.exec(select(SessionEvent).where(SessionEvent.session_id == session_id)).all():
@@ -378,7 +469,14 @@ def delete_discussion_session(session_id: str, session: Session = Depends(get_se
 
 
 @api_router.get("/sessions/{session_id}/result", response_model=SessionResultRead)
-def get_discussion_result(session_id: str, session: Session = Depends(get_session)) -> SessionResult:
+def get_discussion_result(
+    session_id: str,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> SessionResult:
+    discussion = session.get(DiscussionSession, session_id)
+    if discussion is None or discussion.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Session not found")
     result = session.exec(select(SessionResult).where(SessionResult.session_id == session_id)).first()
     if result is None:
         raise HTTPException(status_code=404, detail="Session result not found")
@@ -393,8 +491,9 @@ def list_tasks(
     status: TaskStatus | None = None,
     priority: TaskPriority | None = None,
     session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
 ) -> dict:
-    statement = select(Task)
+    statement = select(Task).where(Task.user_id == current_user.id)
     if project_id:
         statement = statement.where(Task.project_id == project_id)
     if status:
@@ -408,18 +507,27 @@ def list_tasks(
 
 
 @api_router.get("/tasks/{task_id}", response_model=TaskRead)
-def get_task(task_id: str, session: Session = Depends(get_session)) -> Task:
+def get_task(
+    task_id: str,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> Task:
     task = session.get(Task, task_id)
-    if task is None:
+    if task is None or task.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Task not found")
     return task
 
 
 @api_router.post("/tasks", response_model=TaskRead)
-def create_task(payload: TaskCreate, session: Session = Depends(get_session)) -> Task:
-    if session.get(Project, payload.project_id) is None:
+def create_task(
+    payload: TaskCreate,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> Task:
+    project = session.get(Project, payload.project_id)
+    if project is None or project.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Project not found")
-    task = Task(**payload.model_dump())
+    task = Task(**payload.model_dump(), user_id=current_user.id)
     session.add(task)
     session.commit()
     session.refresh(task)
@@ -427,13 +535,20 @@ def create_task(payload: TaskCreate, session: Session = Depends(get_session)) ->
 
 
 @api_router.put("/tasks/{task_id}", response_model=TaskRead)
-def update_task(task_id: str, payload: TaskUpdate, session: Session = Depends(get_session)) -> Task:
+def update_task(
+    task_id: str,
+    payload: TaskUpdate,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> Task:
     task = session.get(Task, task_id)
-    if task is None:
+    if task is None or task.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Task not found")
     updates = payload.model_dump(exclude_unset=True)
-    if "project_id" in updates and updates["project_id"] and session.get(Project, updates["project_id"]) is None:
-        raise HTTPException(status_code=404, detail="Project not found")
+    if "project_id" in updates and updates["project_id"]:
+        project = session.get(Project, updates["project_id"])
+        if project is None or project.user_id != current_user.id:
+            raise HTTPException(status_code=404, detail="Project not found")
     for key, value in updates.items():
         setattr(task, key, value)
     now = utc_now()
@@ -448,9 +563,13 @@ def update_task(task_id: str, payload: TaskUpdate, session: Session = Depends(ge
 
 
 @api_router.delete("/tasks/{task_id}")
-def delete_task(task_id: str, session: Session = Depends(get_session)) -> dict:
+def delete_task(
+    task_id: str,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> dict:
     task = session.get(Task, task_id)
-    if task is None:
+    if task is None or task.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Task not found")
     session.delete(task)
     session.commit()
@@ -481,13 +600,14 @@ def _priority_from_action(action: dict[str, object]) -> TaskPriority:
     return aliases.get(raw_priority, TaskPriority.MEDIUM)
 
 
-def _task_from_action(project_id: str, session_id: str, action: dict[str, object]) -> Task:
+def _task_from_action(project_id: str, session_id: str, user_id: str, action: dict[str, object]) -> Task:
     title = _action_text(action, "title", "未命名行动项").strip() or "未命名行动项"
     description = _action_text(action, "description", _action_text(action, "detail"))
     owner = _action_text(action, "owner", _action_text(action, "assignee_role_code")) or None
     return Task(
         project_id=project_id,
         source_session_id=session_id,
+        user_id=user_id,
         title=title,
         description=description,
         priority=_priority_from_action(action),
@@ -501,9 +621,10 @@ def promote_actions(
     session_id: str,
     payload: PromoteRequest | None = None,
     session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
 ) -> dict:
     discussion = session.get(DiscussionSession, session_id)
-    if discussion is None:
+    if discussion is None or discussion.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Session not found")
     if discussion.status != SessionStatus.COMPLETED:
         raise HTTPException(status_code=400, detail="Session is not completed")
@@ -525,13 +646,14 @@ def promote_actions(
         title = _action_text(action, "title", "未命名行动项").strip() or "未命名行动项"
         existing = session.exec(
             select(Task)
+            .where(Task.user_id == current_user.id)
             .where(Task.source_session_id == session_id)
             .where(Task.title == title)
         ).first()
         if existing is not None:
             skipped_actions.append({"index": index, "title": title, "reason": "already_promoted"})
             continue
-        task = _task_from_action(discussion.project_id, session_id, action)
+        task = _task_from_action(discussion.project_id, session_id, current_user.id, action)
         session.add(task)
         tasks.append(task)
 
@@ -560,12 +682,12 @@ def _format_sse(event: SessionEvent) -> str:
     return f"id: {event.sequence}\nevent: {event.type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
-async def _event_stream(session_id: str) -> AsyncGenerator[str, None]:
+async def _event_stream(session_id: str, user_id: str) -> AsyncGenerator[str, None]:
     last_sequence = 0
     while True:
         with next(get_session()) as db:
             discussion = db.get(DiscussionSession, session_id)
-            if discussion is None:
+            if discussion is None or discussion.user_id != user_id:
                 yield "event: session_failed\ndata: {\"error\":\"Session not found\"}\n\n"
                 return
             events = db.exec(
@@ -583,8 +705,11 @@ async def _event_stream(session_id: str) -> AsyncGenerator[str, None]:
 
 
 @api_router.get("/sessions/{session_id}/events")
-async def stream_session_events(session_id: str) -> StreamingResponse:
-    return StreamingResponse(_event_stream(session_id), media_type="text/event-stream")
+async def stream_session_events(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+) -> StreamingResponse:
+    return StreamingResponse(_event_stream(session_id, current_user.id), media_type="text/event-stream")
 
 
 app.include_router(api_router)

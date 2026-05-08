@@ -1,6 +1,7 @@
 from sqlmodel import Session, select
 
-from astra_api.models import AgentRole, Project, ScenarioTemplate, Task, TaskPriority, TaskStatus
+from astra_api.auth import ADMIN_USERNAME, DISABLED_PASSWORD, admin_login_password, hash_password, verify_password
+from astra_api.models import AgentRole, DiscussionSession, Project, ScenarioTemplate, Task, TaskPriority, TaskStatus, User
 
 
 DEFAULT_ROLES = [
@@ -105,10 +106,11 @@ DEFAULT_PROJECT = Project(
 )
 
 
-def _default_tasks(project_id: str) -> list[Task]:
+def _default_tasks(project_id: str, user_id: str) -> list[Task]:
     return [
         Task(
             project_id=project_id,
+            user_id=user_id,
             title="确认自动结算风控阈值",
             description="把研讨结论中的金额、商户和重复提交规则整理为可配置阈值。",
             status=TaskStatus.TODO,
@@ -118,6 +120,7 @@ def _default_tasks(project_id: str) -> list[Task]:
         ),
         Task(
             project_id=project_id,
+            user_id=user_id,
             title="补充审计记录字段",
             description="为自动结算链路保留必要审计字段，支撑财务回溯。",
             status=TaskStatus.IN_PROGRESS,
@@ -129,14 +132,44 @@ def _default_tasks(project_id: str) -> list[Task]:
 
 
 def seed_defaults(session: Session) -> None:
+    admin = _ensure_admin_user(session)
     if session.exec(select(AgentRole)).first() is None:
         session.add_all(DEFAULT_ROLES)
     if session.exec(select(ScenarioTemplate)).first() is None:
         session.add_all(DEFAULT_SCENARIOS)
     if session.exec(select(Project)).first() is None:
+        DEFAULT_PROJECT.user_id = admin.id
         session.add(DEFAULT_PROJECT)
         session.commit()
+    backfill_user_id(session, admin.id)
     project = session.exec(select(Project)).first()
     if project is not None and session.exec(select(Task)).first() is None:
-        session.add_all(_default_tasks(project.id))
+        session.add_all(_default_tasks(project.id, admin.id))
+    session.commit()
+
+
+def _ensure_admin_user(session: Session) -> User:
+    user = session.exec(select(User).where(User.username == ADMIN_USERNAME)).first()
+    password = admin_login_password() or DISABLED_PASSWORD
+    if user is not None:
+        if admin_login_password() and not verify_password(password, user.hashed_password):
+            # 显式配置管理员密码时同步哈希，避免历史默认密码继续生效。
+            user.hashed_password = hash_password(password)
+            session.add(user)
+            session.commit()
+            session.refresh(user)
+        return user
+    user = User(username=ADMIN_USERNAME, hashed_password=hash_password(password))
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+    return user
+
+
+def backfill_user_id(session: Session, user_id: str) -> None:
+    for model in (Project, DiscussionSession, Task):
+        for item in session.exec(select(model).where(model.user_id == None)).all():  # noqa: E711
+            # 历史数据归属 admin，保证升级后仍能通过 API Key 或 admin 账号访问。
+            item.user_id = user_id
+            session.add(item)
     session.commit()

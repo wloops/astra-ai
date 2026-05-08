@@ -1,4 +1,4 @@
-import { API_BASE_URL, API_KEY } from "./client";
+import { API_BASE_URL, API_KEY, getAuthToken } from "./client";
 import type { SessionEvent, SessionEventType } from "./types";
 
 const SESSION_EVENT_TYPES: SessionEventType[] = [
@@ -69,7 +69,10 @@ export function subscribeToSessionEvents(
     if (closed) return;
 
     const url = new URL(`${API_BASE_URL}/sessions/${encodeURIComponent(sessionId)}/events`);
-    if (API_KEY) {
+    const token = getAuthToken();
+    if (token) {
+      url.searchParams.set("token", token);
+    } else if (API_KEY) {
       url.searchParams.set("api_key", API_KEY);
     }
     source = new EventSource(url.toString());

@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Generic, TypeVar
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from astra_api.models import EventType, SessionStatus, TaskPriority, TaskStatus
 
@@ -24,6 +24,7 @@ class ProjectCreate(BaseModel):
 
 class ProjectRead(ProjectCreate):
     id: str
+    user_id: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -108,6 +109,7 @@ class SessionMetrics(BaseModel):
 
 class SessionRead(BaseModel):
     id: str
+    user_id: str | None = None
     project_id: str
     scenario_id: str
     topic: str
@@ -165,6 +167,7 @@ class TaskUpdate(BaseModel):
 
 class TaskRead(BaseModel):
     id: str
+    user_id: str | None
     project_id: str
     source_session_id: str | None
     title: str
@@ -190,3 +193,22 @@ class PromoteResponse(BaseModel):
     skipped: int
     tasks: list[TaskRead]
     skipped_actions: list[dict[str, Any]] = []
+
+
+class UserCreate(BaseModel):
+    username: str = Field(min_length=1)
+    password: str = Field(min_length=1)
+
+
+class UserRead(BaseModel):
+    id: str
+    username: str
+    created_at: datetime
+    last_login_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
