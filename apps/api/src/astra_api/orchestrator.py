@@ -25,6 +25,7 @@ class WorkflowState(TypedDict, total=False):
     scenario: ScenarioTemplate
     roles: list[AgentRole]
     topic: str
+    model_overrides: dict[str, str]
     role_outputs: list[dict[str, Any]]
     conflicts: list[dict[str, Any]]
     risks: list[dict[str, Any]]
@@ -73,6 +74,10 @@ def update_session(db: Session, session_id: str, **values: Any) -> DiscussionSes
     db.commit()
     db.refresh(discussion)
     return discussion
+
+
+def _model_overrides(state: WorkflowState) -> dict[str, str]:
+    return state.get("model_overrides", {})
 
 
 async def _stage_pause() -> None:
@@ -128,7 +133,13 @@ async def load_context(state: WorkflowState) -> WorkflowState:
         roles = db.exec(select(AgentRole).where(AgentRole.id.in_(discussion.role_ids))).all()
         if not roles:
             roles = db.exec(select(AgentRole).where(AgentRole.code.in_(scenario.default_role_codes))).all()
-        state.update(project=project, scenario=scenario, roles=roles, topic=discussion.topic)
+        state.update(
+            project=project,
+            scenario=scenario,
+            roles=roles,
+            topic=discussion.topic,
+            model_overrides=discussion.model_overrides,
+        )
         update_session(db, state["session_id"], current_stage="load_context")
         record_event(
             db,
@@ -143,7 +154,14 @@ async def load_context(state: WorkflowState) -> WorkflowState:
 
 async def clarify_topic(state: WorkflowState) -> WorkflowState:
     project = state["project"]
-    output = await gateway.complete_structured(role=None, stage="clarify_topic", topic=state["topic"], project=project, context={})
+    output = await gateway.complete_structured(
+        role=None,
+        stage="clarify_topic",
+        topic=state["topic"],
+        project=project,
+        context={},
+        model_overrides=_model_overrides(state),
+    )
     state["open_questions"] = output.get("open_questions", [])
     with Session(engine, expire_on_commit=False) as db:
         update_session(db, state["session_id"], current_stage="clarify_topic")
@@ -187,7 +205,14 @@ async def independent_review(state: WorkflowState) -> WorkflowState:
     for role in state["roles"]:
         if role.code == "host":
             continue
-        output = await gateway.complete_structured(role=role, stage="independent_review", topic=state["topic"], project=state["project"], context={})
+        output = await gateway.complete_structured(
+            role=role,
+            stage="independent_review",
+            topic=state["topic"],
+            project=state["project"],
+            context={},
+            model_overrides=_model_overrides(state),
+        )
         outputs.append({"role_code": role.code, "role_name": role.name, **output})
         with Session(engine, expire_on_commit=False) as db:
             record_event(
@@ -219,6 +244,7 @@ async def detect_conflict(state: WorkflowState) -> WorkflowState:
         topic=state["topic"],
         project=state["project"],
         context=context,
+        model_overrides=_model_overrides(state),
     )
     conflicts = output.get("conflicts", [])
     state["conflicts"] = conflicts
@@ -250,6 +276,7 @@ async def debate(state: WorkflowState) -> WorkflowState:
         topic=state["topic"],
         project=state["project"],
         context=context,
+        model_overrides=_model_overrides(state),
     )
     with Session(engine, expire_on_commit=False) as db:
         update_session(db, state["session_id"], current_stage="debate")
@@ -296,6 +323,7 @@ async def judge_and_summarize(state: WorkflowState) -> WorkflowState:
         topic=state["topic"],
         project=state["project"],
         context=context,
+        model_overrides=_model_overrides(state),
     )
     state["risks"] = output.get("risks") or role_risks
     state["open_questions"] = _unique_questions(existing_questions, role_questions, output.get("open_questions", []))
@@ -313,6 +341,7 @@ async def judge_and_summarize(state: WorkflowState) -> WorkflowState:
                 "stance": output.get("stance", "neutral"),
                 "risks": state["risks"],
                 "open_questions": state["open_questions"],
+                "model_used": output.get("model_used"),
             },
         )
         record_event(
@@ -338,6 +367,7 @@ async def generate_actions(state: WorkflowState) -> WorkflowState:
         topic=state["topic"],
         project=state["project"],
         context=context,
+        model_overrides=_model_overrides(state),
     )
     state["actions"] = output.get("actions", [])
     with Session(engine, expire_on_commit=False) as db:

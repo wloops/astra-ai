@@ -102,6 +102,57 @@ async def test_gateway_parses_remote_json_and_defaults_missing_fields(monkeypatc
     assert output["actions"] == []
 
 
+@pytest.mark.asyncio
+async def test_gateway_uses_model_profile_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    FakeAsyncClient.requests = []
+    FakeAsyncClient.response_content = {"summary": "ok"}
+    monkeypatch.setattr("astra_api.llm_gateway.httpx.AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(
+        settings,
+        "llm_model_profiles",
+        '{"default":{"model":"mini","base_url":"https://default.test/v1","api_key":"default-key"},"strong":{"model":"strong-model","base_url":"https://strong.test/v1","api_key":"strong-key"}}',
+    )
+    monkeypatch.setattr(settings, "llm_stage_routing", "{}")
+    monkeypatch.setattr(settings, "llm_role_routing", "{}")
+
+    output = await LLMGateway().complete_structured(
+        role=None,
+        stage="debate",
+        topic="test",
+        project=Project(name="test"),
+        context={},
+        model_overrides={"debate": "strong"},
+    )
+
+    request = FakeAsyncClient.requests[0]
+    assert request["url"] == "https://strong.test/v1/chat/completions"
+    assert request["json"]["model"] == "strong-model"
+    assert request["headers"]["Authorization"] == "Bearer strong-key"
+    assert output["model_used"] == "strong-model"
+
+
+@pytest.mark.asyncio
+async def test_complete_remote_without_profile_args_uses_global_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    FakeAsyncClient.requests = []
+    FakeAsyncClient.response_content = {"summary": "ok"}
+    monkeypatch.setattr("astra_api.llm_gateway.httpx.AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(settings, "llm_base_url", "https://legacy.test/v1")
+    monkeypatch.setattr(settings, "llm_api_key", "legacy-key")
+    monkeypatch.setattr(settings, "llm_model", "legacy-model")
+
+    await LLMGateway()._complete_remote(
+        role=None,
+        stage="clarify_topic",
+        topic="test",
+        project=Project(name="test"),
+        context={},
+    )
+
+    request = FakeAsyncClient.requests[0]
+    assert request["url"] == "https://legacy.test/v1/chat/completions"
+    assert request["json"]["model"] == "legacy-model"
+
+
 # --- 1.1: 重试行为测试 ---
 
 

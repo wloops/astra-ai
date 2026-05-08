@@ -66,6 +66,20 @@ export interface SessionCreatePayload {
   topic: string;
   role_ids?: string[];
   supplemental_notes?: string;
+  model_overrides?: Record<string, string>;
+}
+
+export interface ModelProfile {
+  name: string;
+  model: string;
+  base_url: string | null;
+}
+
+export interface ModelTestResult {
+  profile_name: string;
+  status: "ok" | "error";
+  latency_ms?: number | null;
+  error?: string | null;
 }
 
 export interface SessionEvent {
@@ -171,6 +185,7 @@ export interface DiscussionSession {
   topic: string;
   role_ids: string[];
   supplemental_notes: string;
+  model_overrides: Record<string, string>;
   status: SessionStatus;
   current_stage: string;
   error_message: string | null;

@@ -88,6 +88,29 @@ describe("apiClient", () => {
     expect(result).toEqual(mockSession);
   });
 
+  it("getModelProfiles and testModel call model endpoints", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve([{ name: "strong", model: "gpt-4o", base_url: "https://api.example.test" }]),
+    } as Response);
+
+    await apiClient.getModelProfiles();
+    expect(fetchMock).toHaveBeenCalledWith(`${API_BASE_URL}/models/profiles`, expect.any(Object));
+
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ profile_name: "strong", status: "ok", latency_ms: 12 }),
+    } as Response);
+    await apiClient.testModel("strong");
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      `${API_BASE_URL}/models/test`,
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ profile_name: "strong" }),
+      }),
+    );
+  });
+
   it("listTasks passes filters", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,

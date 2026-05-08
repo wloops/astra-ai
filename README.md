@@ -38,7 +38,7 @@ npm run validate:openspec       # OpenSpec 校验
 ASTRA_LLM_BASE_URL=https://api.openai.com/v1/chat/completions
 ASTRA_LLM_API_KEY=sk-...
 ASTRA_LLM_MODEL=gpt-4o-mini
-ASTRA_LLM_TIMEOUT=60  # 可选，默认 60s
+ASTRA_LLM_TIMEOUT_SECONDS=60  # 可选，默认 60s
 ```
 
 未配置时使用本地确定性 fallback，Session 仍可完成。
@@ -81,6 +81,8 @@ uv run --project apps/api uvicorn --app-dir apps/api/src astra_api.main:app --ho
 # 健康检查
 curl https://astra-api.wlait.com/health
 ```
+
+云服务器上的后端更新流程见 [docs/backend-update.md](docs/backend-update.md)。仓库文档只保留通用步骤，不提交真实服务器地址、账号或密钥。
 
 ### 安全说明
 

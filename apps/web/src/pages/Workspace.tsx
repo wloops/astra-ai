@@ -30,6 +30,7 @@ interface AgentMessage {
   content: string;
   createdAt: string;
   roleCode: string | null;
+  modelUsed?: string;
 }
 
 const roleIcons = [Bot, User, Code2, ShieldCheck];
@@ -190,6 +191,7 @@ export function Workspace() {
                     content: asText(event.payload),
                     createdAt: event.created_at,
                     roleCode: event.role_code,
+                    modelUsed: typeof event.payload.model_used === "string" ? event.payload.model_used : undefined,
                   },
                 ],
           );
@@ -465,6 +467,11 @@ export function Workspace() {
                     <span className="px-2 py-0.5 bg-blue-50 text-blue-600 rounded-full text-[10px] font-medium">
                       {stageLabel(message.stage)}
                     </span>
+                    {message.modelUsed && (
+                      <span className="px-2 py-0.5 bg-slate-100 text-slate-600 rounded-full text-[10px] font-medium">
+                        {message.modelUsed}
+                      </span>
+                    )}
                     <span className="text-xs text-slate-400 font-medium ml-1">
                       {formatMessageTime(message.createdAt)}
                     </span>

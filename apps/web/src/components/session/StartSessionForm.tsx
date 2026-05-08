@@ -15,8 +15,9 @@ import {
   Users,
 } from "lucide-react";
 import { apiClient } from "../../api/client";
-import type { AgentRole, Project, ScenarioTemplate } from "../../api/types";
+import type { AgentRole, ModelProfile, Project, ScenarioTemplate } from "../../api/types";
 import { cn } from "../../lib/utils";
+import { ModelSelector } from "./ModelSelector";
 
 const roleIcons = [Bot, User, Code, FileSearch];
 
@@ -25,6 +26,8 @@ export function StartSessionForm() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [roles, setRoles] = useState<AgentRole[]>([]);
   const [scenarios, setScenarios] = useState<ScenarioTemplate[]>([]);
+  const [modelProfiles, setModelProfiles] = useState<ModelProfile[]>([]);
+  const [modelOverrides, setModelOverrides] = useState<Record<string, string>>({});
   const [projectId, setProjectId] = useState("");
   const [scenarioId, setScenarioId] = useState("");
   const [roleIds, setRoleIds] = useState<string[]>([]);
@@ -41,16 +44,18 @@ export function StartSessionForm() {
       try {
         setIsLoading(true);
         setError(null);
-        const [projectList, roleList, scenarioList] = await Promise.all([
+        const [projectList, roleList, scenarioList, profiles] = await Promise.all([
           apiClient.listProjects(),
           apiClient.listAgentRoles(),
           apiClient.listScenarioTemplates(),
+          apiClient.getModelProfiles(),
         ]);
         if (cancelled) return;
 
         setProjects(projectList.items);
         setRoles(roleList.items);
         setScenarios(scenarioList.items);
+        setModelProfiles(profiles);
         setProjectId(projectList.items[0]?.id ?? "");
         setScenarioId(scenarioList.items[0]?.id ?? "");
         setRoleIds(roleList.items.filter((role) => role.is_default).map((role) => role.id));
@@ -94,6 +99,7 @@ export function StartSessionForm() {
         topic: topic.trim(),
         role_ids: roleIds,
         supplemental_notes: supplementalNotes.trim(),
+        model_overrides: modelOverrides,
       });
       navigate(`/workspace?sessionId=${encodeURIComponent(session.id)}`);
     } catch (err) {
@@ -177,6 +183,13 @@ export function StartSessionForm() {
             </label>
           </div>
         </div>
+
+        <ModelSelector
+          profiles={modelProfiles}
+          scenario={selectedScenario}
+          value={modelOverrides}
+          onChange={setModelOverrides}
+        />
 
         <div className="px-8 py-6 border-b border-slate-100">
           <div className="flex items-center gap-2 mb-6 text-slate-900 font-bold text-lg">

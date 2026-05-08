@@ -2,6 +2,8 @@ import type {
   AgentRole,
   AuthPayload,
   DiscussionSession,
+  ModelProfile,
+  ModelTestResult,
   PaginatedResponse,
   Project,
   ScenarioTemplate,
@@ -69,6 +71,14 @@ export const apiClient = {
     request<TokenResponse>("/auth/login", {
       method: "POST",
       body: JSON.stringify(payload),
+    }),
+
+  // Models
+  getModelProfiles: () => request<ModelProfile[]>("/models/profiles"),
+  testModel: (profileName: string) =>
+    request<ModelTestResult>("/models/test", {
+      method: "POST",
+      body: JSON.stringify({ profile_name: profileName }),
     }),
 
   // Projects

@@ -1,8 +1,11 @@
 import asyncio
 import json
+import time
 from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
+from urllib.parse import urlparse
 
+import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -42,9 +45,14 @@ from astra_api.models import (
 )
 from astra_api.orchestrator import run_session_workflow
 from astra_api.metrics import compute_session_metrics
+from astra_api.llm_gateway import LLMGateway
+from astra_api.model_registry import list_available_profiles
 from astra_api.schemas import (
     AgentRoleCreate,
     AgentRoleRead,
+    ModelProfile,
+    ModelTestRequest,
+    ModelTestResult,
     PaginatedResponse,
     ProjectCreate,
     ProjectRead,
@@ -183,6 +191,71 @@ def login_user(payload: UserCreate, session: Session = Depends(get_session)) -> 
 def require_admin_user(current_user: User) -> None:
     if not is_admin_user(current_user):
         raise HTTPException(status_code=403, detail="Admin privileges required")
+
+
+def _display_base_url(base_url: str | None) -> str | None:
+    """Expose only provider scheme and host; credentials stay server-side."""
+
+    if not base_url:
+        return None
+    parsed = urlparse(base_url)
+    if not parsed.netloc:
+        return base_url
+    return f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme else parsed.netloc
+
+
+@api_router.get("/models/profiles", response_model=list[ModelProfile])
+def list_model_profiles() -> list[dict[str, str | None]]:
+    profiles = list_available_profiles()
+    return [
+        {
+            "name": profile.name,
+            "model": profile.model,
+            "base_url": _display_base_url(profile.base_url),
+        }
+        for profile in profiles.values()
+    ]
+
+
+@api_router.post("/models/test", response_model=ModelTestResult)
+async def test_model_profile(payload: ModelTestRequest) -> dict[str, object]:
+    profiles = list_available_profiles()
+    profile = profiles.get(payload.profile_name)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Model profile not found")
+    if not profile.base_url or not profile.api_key:
+        return {
+            "profile_name": payload.profile_name,
+            "status": "error",
+            "error": "Model profile is missing base_url or api_key",
+        }
+
+    started = time.perf_counter()
+    try:
+        url = LLMGateway()._chat_completions_url(profile.base_url)
+        async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
+            response = await client.post(
+                url,
+                json={
+                    "model": profile.model,
+                    "messages": [{"role": "user", "content": "ping"}],
+                    "max_tokens": 1,
+                },
+                headers={"Authorization": f"Bearer {profile.api_key}"},
+            )
+            response.raise_for_status()
+    except Exception as exc:
+        return {
+            "profile_name": payload.profile_name,
+            "status": "error",
+            "latency_ms": int((time.perf_counter() - started) * 1000),
+            "error": str(exc),
+        }
+    return {
+        "profile_name": payload.profile_name,
+        "status": "ok",
+        "latency_ms": int((time.perf_counter() - started) * 1000),
+    }
 
 
 @api_router.get("/projects", response_model=PaginatedResponse[ProjectRead])
@@ -430,6 +503,7 @@ def get_discussion_session(
         "topic": discussion.topic,
         "role_ids": discussion.role_ids,
         "supplemental_notes": discussion.supplemental_notes,
+        "model_overrides": discussion.model_overrides,
         "status": discussion.status,
         "current_stage": discussion.current_stage,
         "error_message": discussion.error_message,

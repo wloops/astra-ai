@@ -76,6 +76,24 @@ class SessionCreate(BaseModel):
     topic: str
     role_ids: list[str] = []
     supplemental_notes: str = ""
+    model_overrides: dict[str, str] = Field(default_factory=dict)
+
+
+class ModelProfile(BaseModel):
+    name: str
+    model: str
+    base_url: str | None = None
+
+
+class ModelTestRequest(BaseModel):
+    profile_name: str
+
+
+class ModelTestResult(BaseModel):
+    profile_name: str
+    status: str
+    latency_ms: int | None = None
+    error: str | None = None
 
 
 class SessionEventRead(BaseModel):
@@ -115,6 +133,7 @@ class SessionRead(BaseModel):
     topic: str
     role_ids: list[str]
     supplemental_notes: str
+    model_overrides: dict[str, str]
     status: SessionStatus
     current_stage: str
     error_message: str | None

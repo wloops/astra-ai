@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 
 from astra_api.config import settings
+from astra_api.model_registry import resolve_model
 from astra_api.models import AgentRole, Project
 
 logger = logging.getLogger(__name__)
@@ -112,18 +113,26 @@ class LLMGateway:
         topic: str,
         project: Project,
         context: dict[str, Any],
+        model_overrides: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         prompt_config = STAGE_PROMPTS.get(stage, STAGE_PROMPTS["independent_review"])
-        if settings.llm_base_url and settings.llm_api_key:
-            return await self._complete_remote(
+        profile = resolve_model(stage=stage, role=role, model_overrides=model_overrides)
+        if profile.base_url and profile.api_key:
+            output = await self._complete_remote(
                 role=role,
                 stage=stage,
                 topic=topic,
                 project=project,
                 context=context,
                 prompt_config=prompt_config,
+                model=profile.model,
+                base_url=profile.base_url,
+                api_key=profile.api_key,
             )
-        return self._complete_local(role=role, stage=stage, topic=topic, project=project, context=context)
+        else:
+            output = self._complete_local(role=role, stage=stage, topic=topic, project=project, context=context)
+        output["model_used"] = profile.model
+        return output
 
     async def _complete_remote(
         self,
@@ -134,8 +143,14 @@ class LLMGateway:
         project: Project,
         context: dict[str, Any],
         prompt_config: dict[str, Any] | None = None,
+        model: str | None = None,
+        base_url: str | None = None,
+        api_key: str | None = None,
     ) -> dict[str, Any]:
         prompt_config = prompt_config or STAGE_PROMPTS.get(stage, STAGE_PROMPTS["independent_review"])
+        model = model or settings.llm_model
+        base_url = base_url or settings.llm_base_url
+        api_key = api_key or settings.llm_api_key
         role_name = role.name if role else "AI 主持人"
         role_code = role.code if role else "host"
         prompt = (
@@ -148,15 +163,15 @@ class LLMGateway:
             "请严格返回一个 JSON object，不要使用 Markdown，不要补充 JSON 之外的文字。"
         )
         payload = {
-            "model": settings.llm_model,
+            "model": model,
             "messages": [
                 {"role": "system", "content": prompt_config["system"]},
                 {"role": "user", "content": prompt},
             ],
             "temperature": 0.2,
         }
-        headers = {"Authorization": f"Bearer {settings.llm_api_key}"}
-        url = self._chat_completions_url(settings.llm_base_url)
+        headers = {"Authorization": f"Bearer {api_key}"}
+        url = self._chat_completions_url(base_url)
         timeout = settings.llm_timeout_seconds
 
         max_retries = 2
@@ -171,22 +186,22 @@ class LLMGateway:
                 parsed = self._parse_json_content(content)
                 elapsed_ms = (time.perf_counter() - t_start) * 1000
                 logger.info(
-                    "llm_call stage=%s role=%s status=success elapsed_ms=%.0f",
-                    stage, role_code, elapsed_ms,
+                    "llm_call stage=%s role=%s model=%s status=success elapsed_ms=%.0f",
+                    stage, role_code, model, elapsed_ms,
                 )
                 return self._normalize_output(parsed, stage=stage)
             except (httpx.TimeoutException, httpx.ConnectError) as exc:
                 elapsed_ms = (time.perf_counter() - t_start) * 1000
                 if attempt < max_retries:
                     logger.warning(
-                        "llm_call stage=%s role=%s status=retry_%d elapsed_ms=%.0f error=%s",
-                        stage, role_code, attempt + 1, elapsed_ms, exc,
+                        "llm_call stage=%s role=%s model=%s status=retry_%d elapsed_ms=%.0f error=%s",
+                        stage, role_code, model, attempt + 1, elapsed_ms, exc,
                     )
                     await asyncio.sleep(1)
                     continue
                 logger.error(
-                    "llm_call stage=%s role=%s status=fallback elapsed_ms=%.0f error=%s",
-                    stage, role_code, elapsed_ms, exc,
+                    "llm_call stage=%s role=%s model=%s status=fallback elapsed_ms=%.0f error=%s",
+                    stage, role_code, model, elapsed_ms, exc,
                 )
                 return self._complete_local(role=role, stage=stage, topic=topic, project=project, context=context)
             except httpx.HTTPStatusError as exc:
@@ -195,28 +210,28 @@ class LLMGateway:
                 # 4xx 客户端错误（鉴权失败/参数错误/模型不存在）不重试，直接抛出
                 if 400 <= status_code < 500:
                     logger.error(
-                        "llm_call stage=%s role=%s status=client_error http=%d elapsed_ms=%.0f",
-                        stage, role_code, status_code, elapsed_ms,
+                        "llm_call stage=%s role=%s model=%s status=client_error http=%d elapsed_ms=%.0f",
+                        stage, role_code, model, status_code, elapsed_ms,
                     )
                     raise
                 # 5xx 服务端错误可重试
                 if attempt < max_retries:
                     logger.warning(
-                        "llm_call stage=%s role=%s status=retry_%d http=%d elapsed_ms=%.0f",
-                        stage, role_code, attempt + 1, status_code, elapsed_ms,
+                        "llm_call stage=%s role=%s model=%s status=retry_%d http=%d elapsed_ms=%.0f",
+                        stage, role_code, model, attempt + 1, status_code, elapsed_ms,
                     )
                     await asyncio.sleep(1)
                     continue
                 logger.error(
-                    "llm_call stage=%s role=%s status=server_error http=%d elapsed_ms=%.0f",
-                    stage, role_code, status_code, elapsed_ms,
+                    "llm_call stage=%s role=%s model=%s status=server_error http=%d elapsed_ms=%.0f",
+                    stage, role_code, model, status_code, elapsed_ms,
                 )
                 return self._complete_local(role=role, stage=stage, topic=topic, project=project, context=context)
             except Exception as exc:
                 elapsed_ms = (time.perf_counter() - t_start) * 1000
                 logger.error(
-                    "llm_call stage=%s role=%s status=error elapsed_ms=%.0f error=%s",
-                    stage, role_code, elapsed_ms, exc,
+                    "llm_call stage=%s role=%s model=%s status=error elapsed_ms=%.0f error=%s",
+                    stage, role_code, model, elapsed_ms, exc,
                 )
                 # JSON 解析失败等，fallback 到本地
                 return self._complete_local(role=role, stage=stage, topic=topic, project=project, context=context)

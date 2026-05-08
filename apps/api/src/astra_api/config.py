@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     llm_base_url: str | None = None
     llm_api_key: str | None = None
     llm_model: str = "gpt-4o-mini"
+    llm_model_profiles: str = ""
+    llm_stage_routing: str = ""
+    llm_role_routing: str = ""
     cors_origins: str = ""
     api_key: str = ""
     jwt_secret: str = ""

@@ -120,6 +120,7 @@ class DiscussionSessionBase(SQLModel):
     topic: str
     role_ids: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     supplemental_notes: str = ""
+    model_overrides: dict[str, str] = Field(default_factory=dict, sa_column=Column(JSON))
 
 
 class DiscussionSession(DiscussionSessionBase, table=True):

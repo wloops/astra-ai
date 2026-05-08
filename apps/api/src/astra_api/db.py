@@ -14,6 +14,7 @@ engine = create_engine(settings.database_url, connect_args=connect_args)
 def init_db() -> None:
     SQLModel.metadata.create_all(engine)
     migrate_sqlite_user_columns()
+    migrate_sqlite_session_model_overrides()
 
 
 def migrate_sqlite_user_columns() -> None:
@@ -32,6 +33,22 @@ def migrate_sqlite_user_columns() -> None:
         with engine.begin() as connection:
             connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN user_id VARCHAR"))
             connection.execute(text(f"CREATE INDEX IF NOT EXISTS ix_{table_name}_user_id ON {table_name} (user_id)"))
+
+
+def migrate_sqlite_session_model_overrides() -> None:
+    """Keep existing local SQLite databases compatible with the new session JSON column."""
+
+    if not settings.database_url.startswith("sqlite"):
+        return
+    inspector = inspect(engine)
+    table_names = set(inspector.get_table_names())
+    if "discussionsession" not in table_names:
+        return
+    columns = {column["name"] for column in inspector.get_columns("discussionsession")}
+    if "model_overrides" in columns:
+        return
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE discussionsession ADD COLUMN model_overrides JSON DEFAULT '{}'"))
 
 
 def get_session() -> Generator[Session, None, None]:
