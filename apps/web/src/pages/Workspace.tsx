@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import { apiClient } from "../api/client";
 import { subscribeToSessionEvents } from "../api/events";
-import type { AgentRole, DiscussionSession, Project, ScenarioTemplate, SessionEvent } from "../api/types";
+import type { AgentRole, DiscussionSession, HostDecision, Project, ScenarioTemplate, SessionEvent } from "../api/types";
 import { Navbar } from "../components/dashboard/Navbar";
 import { cn } from "../lib/utils";
 
@@ -31,6 +31,19 @@ interface AgentMessage {
   createdAt: string;
   roleCode: string | null;
   modelUsed?: string;
+}
+
+interface StageProgressItem {
+  stage: string;
+  added: boolean;
+  skippedReason?: string;
+  decisions?: StageDecisionSummary[];
+}
+
+interface StageDecisionSummary {
+  id: string;
+  label: string;
+  reason: string;
 }
 
 const roleIcons = [Bot, User, Code2, ShieldCheck];
@@ -104,6 +117,42 @@ function asText(value: unknown): string {
     return asText(record.summary ?? record.message ?? record.final_conclusion ?? Object.values(record).join("；"));
   }
   return "";
+}
+
+function asHostDecision(payload: Record<string, unknown>): HostDecision {
+  return {
+    action: String(payload.action ?? "NEXT_STAGE") as HostDecision["action"],
+    reason: asText(payload.reason),
+    stage: typeof payload.stage === "string" ? payload.stage : null,
+    stage_name: typeof payload.stage_name === "string" ? payload.stage_name : null,
+    stage_prompt: typeof payload.stage_prompt === "string" ? payload.stage_prompt : null,
+    role_code: typeof payload.role_code === "string" ? payload.role_code : null,
+    role_name: typeof payload.role_name === "string" ? payload.role_name : null,
+    role_responsibility: typeof payload.role_responsibility === "string" ? payload.role_responsibility : null,
+    roles: Array.isArray(payload.roles) ? payload.roles.map(String) : [],
+    phase: payload.phase === "initial_planning" ? "initial_planning" : payload.phase === "runtime" ? "runtime" : undefined,
+    selected_role_codes: Array.isArray(payload.selected_role_codes) ? payload.selected_role_codes.map(String) : undefined,
+    role_reasons: payload.role_reasons && typeof payload.role_reasons === "object" ? payload.role_reasons as Record<string, string> : undefined,
+    model_used: typeof payload.model_used === "string" ? payload.model_used : null,
+  };
+}
+
+function hostDecisionLabel(decision: HostDecision): string {
+  if (decision.phase === "initial_planning") return "会前组队";
+  if (decision.action === "ADD_STAGE") return "新增阶段";
+  if (decision.action === "SKIP_STAGE") return "跳过阶段";
+  if (decision.action === "PULL_ROLE") return "补充角色";
+  if (decision.action === "REMOVE_ROLE") return "移除角色";
+  if (decision.action === "PARALLEL_RUN") return "并行推进";
+  if (decision.action === "CONCLUDE") return "收束结论";
+  return "主持判断";
+}
+
+function hostDecisionFallback(decision: HostDecision): string {
+  if (decision.phase === "initial_planning" && decision.selected_role_codes?.length) {
+    return `本轮参会角色：${decision.selected_role_codes.join("、")}`;
+  }
+  return "Host Agent 已给出阶段判断";
 }
 
 export function Workspace() {
@@ -242,7 +291,63 @@ export function Workspace() {
     return () => subscription.close();
   }, [sessionId]);
 
-  const stages = useMemo(() => scenario?.stages ?? [], [scenario]);
+  const stageItems = useMemo<StageProgressItem[]>(() => {
+    const ordered = new Map<string, StageProgressItem>();
+    (scenario?.stages ?? []).forEach((stage) => ordered.set(stage, { stage, added: false }));
+    events.forEach((event) => {
+      const stage = event.stage ?? undefined;
+      if ((event.type === "stage_started" || event.type === "stage_completed") && stage && !ordered.has(stage)) {
+        ordered.set(stage, { stage, added: false });
+      }
+      if (event.type === "host_decision") {
+        const decision = asHostDecision(event.payload);
+        const decisionStage = decision.stage_name ?? decision.stage ?? undefined;
+        if (decisionStage) {
+          const existing = ordered.get(decisionStage) ?? { stage: decisionStage, added: decision.action === "ADD_STAGE" };
+          ordered.set(decisionStage, {
+            ...existing,
+            added: existing.added || decision.action === "ADD_STAGE",
+            decisions: [
+              ...(existing.decisions ?? []),
+              {
+                id: event.id,
+                label: hostDecisionLabel(decision),
+                reason: decision.reason || hostDecisionFallback(decision),
+              },
+            ],
+          });
+        }
+      }
+      if (event.type === "stage_added" && stage) {
+        const existing = ordered.get(stage) ?? { stage, added: false };
+        ordered.set(stage, { ...existing, added: true });
+      }
+      if (event.type === "stage_skipped" && stage) {
+        const existing = ordered.get(stage) ?? { stage, added: false };
+        ordered.set(stage, { ...existing, skippedReason: asText(event.payload.reason) });
+      }
+    });
+    return Array.from(ordered.values());
+  }, [events, scenario?.stages]);
+  const stages = useMemo(() => stageItems.map((item) => item.stage), [stageItems]);
+  const skippedStageReasons = useMemo(() => {
+    const entries = stageItems
+      .filter((item) => item.skippedReason)
+      .map((item) => [item.stage, item.skippedReason as string] as const);
+    return new Map(entries);
+  }, [stageItems]);
+  const activeRoleCodes = useMemo(() => {
+    const initialCodes = new Set(
+      roles.filter((role) => session?.role_ids.includes(role.id)).map((role) => role.code),
+    );
+    events.forEach((event) => {
+      const roleCode = event.role_code ?? (typeof event.payload.role_code === "string" ? event.payload.role_code : null);
+      if (!roleCode) return;
+      if (event.type === "role_pulled") initialCodes.add(roleCode);
+      if (event.type === "role_removed") initialCodes.delete(roleCode);
+    });
+    return initialCodes;
+  }, [events, roles, session?.role_ids]);
   const latestStartedStage = [...events]
     .reverse()
     .find((event) => event.type === "stage_started" && event.stage)?.stage;
@@ -253,6 +358,7 @@ export function Workspace() {
     const completed = new Set(
       events.filter((event) => event.type === "stage_completed" && event.stage).map((event) => event.stage as string),
     );
+    skippedStageReasons.forEach((_, stage) => completed.add(stage));
     const currentIndex = stages.indexOf(currentStage);
 
     // 后端不会为所有阶段发 stage_completed；展示层用阶段顺序补齐已越过的阶段。
@@ -267,7 +373,7 @@ export function Workspace() {
     }
 
     return completed;
-  }, [currentStage, events, session?.status, stages]);
+  }, [currentStage, events, session?.status, skippedStageReasons, stages]);
   useEffect(() => {
     if (!active) return;
     const timer = window.setInterval(() => setNowMs(Date.now()), 30_000);
@@ -285,7 +391,7 @@ export function Workspace() {
       : elapsedMs && overviewProgress > 0
         ? `${Math.max(1, Math.round((elapsedMs / overviewProgress) * (100 - overviewProgress) / 60_000))} 分钟`
         : "--";
-  const visibleRoleCount = session?.role_ids.length ?? 0;
+  const visibleRoleCount = activeRoleCodes.size;
   const agentMessageCount = events.filter((event) => event.type === "agent_message").length;
   const latestConflictEvent = [...events].reverse().find((event) => event.type === "conflict_detected");
   const latestConflicts = latestConflictEvent?.payload.conflicts;
@@ -375,24 +481,40 @@ export function Workspace() {
             </div>
             <div className="relative space-y-5 mt-2 pb-4">
               <div className="absolute left-[11px] top-6 bottom-6 w-px bg-slate-200" />
-              {stages.map((stage, index) => {
+              {stageItems.map((item, index) => {
+                const stage = item.stage;
                 const completed = completedStages.has(stage);
-                const current = currentStage === stage && !completed;
+                const skipped = skippedStageReasons.has(stage);
+                const current = currentStage === stage && !completed && !skipped;
                 return (
                   <div key={stage} className="relative flex items-start gap-4">
                     <div
                       className={cn(
                         "relative z-10 w-6 h-6 rounded-full flex items-center justify-center shrink-0 text-xs font-bold ring-4 ring-white",
-                        completed || current ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-400 border border-slate-200",
+                        skipped
+                          ? "bg-slate-200 text-slate-500"
+                          : completed || current
+                            ? "bg-blue-600 text-white"
+                            : "bg-slate-100 text-slate-400 border border-slate-200",
                       )}
                     >
-                      {completed ? <Check className="w-3.5 h-3.5" /> : index + 1}
+                      {completed && !skipped ? <Check className="w-3.5 h-3.5" /> : index + 1}
                     </div>
-                    <div className={cn("flex flex-col -mt-0.5", completed || current ? "opacity-100" : "opacity-50")}>
+                    <div
+                      className={cn("flex flex-col -mt-0.5", completed || current ? "opacity-100" : "opacity-50")}
+                      title={skippedStageReasons.get(stage)}
+                    >
                       <span className={cn("text-sm font-medium", current ? "text-blue-600" : "text-slate-800")}>
                         {stageLabel(stage)}
+                        {item.added && <span className="ml-1 text-[10px] text-blue-500">新增</span>}
                       </span>
                       <span className="text-xs text-slate-400">{completed ? "已完成" : current ? "进行中" : "等待中"}</span>
+                      {item.decisions?.slice(-2).map((decision) => (
+                        <span key={decision.id} className="mt-1 rounded-lg bg-blue-50 px-2 py-1 text-[11px] leading-snug text-blue-700">
+                          <span className="font-semibold">{decision.label}：</span>
+                          <span>{decision.reason}</span>
+                        </span>
+                      ))}
                     </div>
                   </div>
                 );
@@ -421,7 +543,7 @@ export function Workspace() {
             {error && <div className="mb-3 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
             <div className="flex gap-3 overflow-x-auto pb-2">
               {roles
-                .filter((role) => session?.role_ids.includes(role.id))
+                .filter((role) => activeRoleCodes.has(role.code))
                 .map((role, index) => {
                   const Icon = roleIcons[index % roleIcons.length];
                   return (
@@ -719,20 +841,31 @@ export function Workspace() {
             <div className="space-y-3">
               <h3 className="text-sm font-bold text-slate-900">研讨阶段</h3>
               <div className="space-y-3">
-                {stages.map((stage, index) => {
+                {stageItems.map((item, index) => {
+                  const stage = item.stage;
                   const completed = completedStages.has(stage);
-                  const current = currentStage === stage && !completed;
+                  const skipped = skippedStageReasons.has(stage);
+                  const current = currentStage === stage && !completed && !skipped;
                   return (
                     <div key={stage} className="flex items-center gap-3">
                       <div className={cn(
                         'w-6 h-6 rounded-full flex items-center justify-center shrink-0 text-xs font-bold',
-                        completed || current ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-400 border border-slate-200',
+                        skipped ? 'bg-slate-200 text-slate-500' : completed || current ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-400 border border-slate-200',
                       )}>
-                        {completed ? <Check className="w-3.5 h-3.5" /> : index + 1}
+                        {completed && !skipped ? <Check className="w-3.5 h-3.5" /> : index + 1}
                       </div>
                       <div className="flex flex-col">
-                        <span className={cn('text-sm', current ? 'text-blue-600 font-medium' : 'text-slate-700')}>{stageLabel(stage)}</span>
+                        <span className={cn('text-sm', current ? 'text-blue-600 font-medium' : 'text-slate-700')}>
+                          {stageLabel(stage)}
+                          {item.added && <span className="ml-1 text-[10px] text-blue-500">新增</span>}
+                        </span>
                         <span className="text-xs text-slate-400">{completed ? '已完成' : current ? '进行中' : '等待中'}</span>
+                        {item.decisions?.slice(-1).map((decision) => (
+                          <span key={decision.id} className="mt-1 rounded-lg bg-blue-50 px-2 py-1 text-[11px] leading-snug text-blue-700">
+                            <span className="font-semibold">{decision.label}：</span>
+                            <span>{decision.reason}</span>
+                          </span>
+                        ))}
                       </div>
                     </div>
                   );

@@ -23,6 +23,34 @@ DEFAULT_OUTPUT: dict[str, Any] = {
 
 
 STAGE_PROMPTS: dict[str, dict[str, Any]] = {
+    "initial_role_planning": {
+        "system": (
+            "You are Astra's Host Agent. Select the roles needed before the discussion starts. "
+            "You must keep every user-selected role, may add only existing role codes, and must return one JSON object only."
+        ),
+        "schema": {
+            "selected_role_codes": ["Final role codes, including user-selected roles and added existing roles"],
+            "reason": "User-facing Chinese explanation for the team composition",
+            "role_reasons": {"role_code": "Why this role is needed"},
+        },
+    },
+    "host_decision": {
+        "system": (
+            "You are Astra's Host Agent. Decide the next orchestration action for this discussion. "
+            "Return one JSON object only. Use concise Chinese for the user-facing reason."
+        ),
+        "schema": {
+            "action": "NEXT_STAGE | SKIP_STAGE | ADD_STAGE | PULL_ROLE | REMOVE_ROLE | PARALLEL_RUN | CONCLUDE",
+            "reason": "User-facing reason in Chinese",
+            "stage": "Existing stage for NEXT_STAGE/SKIP_STAGE/PARALLEL_RUN",
+            "stage_name": "New stage name for ADD_STAGE",
+            "stage_prompt": "Prompt for ADD_STAGE",
+            "role_code": "Role code for PULL_ROLE/REMOVE_ROLE",
+            "role_name": "Ad-hoc role name for PULL_ROLE",
+            "role_responsibility": "Ad-hoc role responsibility for PULL_ROLE",
+            "roles": ["Role codes for PARALLEL_RUN"],
+        },
+    },
     "clarify_topic": {
         "system": "你是 Astra 的 AI 主持人。请澄清议题范围，识别需要补充确认的问题，并只输出 JSON。",
         "schema": {
@@ -105,6 +133,46 @@ STAGE_PROMPTS: dict[str, dict[str, Any]] = {
 class LLMGateway:
     """Single-model gateway with stage-aware prompts and deterministic fallback."""
 
+    async def plan_initial_roles(
+        self,
+        *,
+        topic: str,
+        project: Project,
+        context: dict[str, Any],
+        model_overrides: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """Let the Host Agent choose the initial team before the runtime loop."""
+
+        output = await self.complete_structured(
+            role=None,
+            stage="initial_role_planning",
+            topic=topic,
+            project=project,
+            context=context,
+            model_overrides=model_overrides,
+        )
+        return self._normalize_initial_role_plan(output, context)
+
+    async def host_decide(
+        self,
+        *,
+        topic: str,
+        project: Project,
+        context: dict[str, Any],
+        model_overrides: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """Ask the Host Agent for a structured orchestration decision."""
+
+        output = await self.complete_structured(
+            role=None,
+            stage="host_decision",
+            topic=topic,
+            project=project,
+            context=context,
+            model_overrides=model_overrides,
+        )
+        return self._normalize_host_decision(output, context)
+
     async def complete_structured(
         self,
         *,
@@ -153,6 +221,8 @@ class LLMGateway:
         api_key = api_key or settings.llm_api_key
         role_name = role.name if role else "AI 主持人"
         role_code = role.code if role else "host"
+        if stage == "host_decision":
+            return self._local_host_decision(context)
         prompt = (
             f"角色：{role_name}\n"
             f"阶段：{stage}\n"
@@ -249,6 +319,8 @@ class LLMGateway:
     ) -> dict[str, Any]:
         role_code = role.code if role else "host"
         role_name = role.name if role else "AI 主持人"
+        if stage == "initial_role_planning":
+            return self._local_initial_role_plan(context)
         if stage == "clarify_topic":
             return {
                 "summary": f"议题聚焦为：在 {project.name} 中评估「{topic}」是否满足自动化落地条件。",
@@ -348,6 +420,11 @@ class LLMGateway:
         return parsed
 
     def _normalize_output(self, data: dict[str, Any], *, stage: str) -> dict[str, Any]:
+        if stage == "initial_role_planning":
+            return data
+        if stage == "host_decision":
+            return data
+
         output = dict(DEFAULT_OUTPUT)
         output["summary"] = data["summary"] if isinstance(data.get("summary"), str) else ""
         output["stance"] = data["stance"] if isinstance(data.get("stance"), str) else "neutral"
@@ -361,6 +438,144 @@ class LLMGateway:
             final_conclusion = data.get("final_conclusion")
             output["final_conclusion"] = final_conclusion if isinstance(final_conclusion, str) else output["summary"]
         return output
+
+    def _normalize_initial_role_plan(self, data: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+        selected_role_codes = data.get("selected_role_codes")
+        if not isinstance(selected_role_codes, list):
+            return self._local_initial_role_plan(context)
+        role_reasons = data.get("role_reasons")
+        return {
+            "phase": "initial_planning",
+            "selected_role_codes": [str(code) for code in selected_role_codes],
+            "reason": data.get("reason") if isinstance(data.get("reason"), str) else "",
+            "role_reasons": role_reasons if isinstance(role_reasons, dict) else {},
+            "model_used": data.get("model_used") if isinstance(data.get("model_used"), str) else None,
+        }
+
+    def _local_initial_role_plan(self, context: dict[str, Any]) -> dict[str, Any]:
+        user_selected = [str(code) for code in context.get("user_selected_role_codes") or []]
+        default_codes = [str(code) for code in context.get("default_role_codes") or []]
+        available = {str(role.get("code")) for role in context.get("available_roles", []) if isinstance(role, dict)}
+        selected: list[str] = []
+        for code in [*user_selected, *default_codes]:
+            if code and code in available and code not in selected:
+                selected.append(code)
+        if "host" in available and "host" not in selected:
+            selected.insert(0, "host")
+        role_reasons = {
+            code: ("用户已选择该角色" if code in user_selected else "场景默认建议该角色参与本次研讨")
+            for code in selected
+        }
+        return {
+            "phase": "initial_planning",
+            "selected_role_codes": selected,
+            "reason": "会前组队保留用户已选角色，并补齐场景建议的关键专家角色。",
+            "role_reasons": role_reasons,
+        }
+
+    def _normalize_host_decision(self, data: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+        allowed_actions = {
+            "NEXT_STAGE",
+            "SKIP_STAGE",
+            "ADD_STAGE",
+            "PULL_ROLE",
+            "REMOVE_ROLE",
+            "PARALLEL_RUN",
+            "CONCLUDE",
+        }
+        action = str(data.get("action") or "").upper()
+        if action not in allowed_actions:
+            return self._local_host_decision(context)
+        roles = data.get("roles")
+        return {
+            "action": action,
+            "reason": data.get("reason") if isinstance(data.get("reason"), str) else "",
+            "stage": data.get("stage") if isinstance(data.get("stage"), str) else None,
+            "stage_name": data.get("stage_name") if isinstance(data.get("stage_name"), str) else None,
+            "stage_prompt": data.get("stage_prompt") if isinstance(data.get("stage_prompt"), str) else None,
+            "role_code": data.get("role_code") if isinstance(data.get("role_code"), str) else None,
+            "role_name": data.get("role_name") if isinstance(data.get("role_name"), str) else None,
+            "role_responsibility": data.get("role_responsibility") if isinstance(data.get("role_responsibility"), str) else None,
+            "roles": [str(role) for role in roles] if isinstance(roles, list) else [],
+            "model_used": data.get("model_used") if isinstance(data.get("model_used"), str) else None,
+        }
+
+    def _local_host_decision(self, context: dict[str, Any]) -> dict[str, Any]:
+        suggested = [stage for stage in context.get("suggested_stages", []) if isinstance(stage, str)]
+        completed = set(context.get("completed_stages", []))
+        skipped = {item.get("stage") for item in context.get("skipped_stages", []) if isinstance(item, dict)}
+        actionable = [stage for stage in suggested if stage not in {"init_session", "load_context", "finalize_minutes"}]
+
+        for stage in actionable:
+            if stage in completed or stage in skipped:
+                continue
+            if stage == "debate" and self._can_skip_debate(context):
+                return {
+                    "action": "SKIP_STAGE",
+                    "reason": "各角色观点未形成重大分歧，可跳过交叉辩论并进入裁决总结。",
+                    "stage": "debate",
+                    "roles": [],
+                }
+            if stage == "independent_review":
+                active_codes = {str(code) for code in context.get("active_role_codes") or []}
+                default_codes = [str(code) for code in context.get("default_role_codes") or []]
+                missing_defaults = [code for code in default_codes if code != "host" and code not in active_codes]
+                if missing_defaults:
+                    role_code = missing_defaults[0]
+                    return {
+                        "action": "PULL_ROLE",
+                        "reason": f"独立评审需要补齐默认专家角色 {role_code}，先拉入该角色再继续。",
+                        "role_code": role_code,
+                        "roles": [],
+                    }
+                if not [code for code in active_codes if code != "host"]:
+                    return {
+                        "action": "PULL_ROLE",
+                        "reason": "当前只有主持人，独立评审需要至少拉入一个专家角色。",
+                        "role_code": "product_manager",
+                        "roles": [],
+                    }
+                role_codes = context.get("active_role_codes") or []
+                return {
+                    "action": "PARALLEL_RUN",
+                    "reason": "独立评审适合并行收集各角色观点。",
+                    "stage": stage,
+                    "roles": [str(code) for code in role_codes if code != "host"],
+                }
+            if stage == "independent_review":
+                role_codes = context.get("active_role_codes") or []
+                return {
+                    "action": "PARALLEL_RUN",
+                    "reason": "独立评审适合并行收集各角色观点。",
+                    "stage": stage,
+                    "roles": [str(code) for code in role_codes if code != "host"],
+                }
+            return {
+                "action": "NEXT_STAGE",
+                "reason": f"继续执行建议流程中的 {stage} 阶段。",
+                "stage": stage,
+                "roles": [],
+            }
+        return {
+            "action": "CONCLUDE",
+            "reason": "建议流程已完成，进入结果沉淀。",
+            "roles": [],
+        }
+
+    def _can_skip_debate(self, context: dict[str, Any]) -> bool:
+        model_overrides = context.get("model_overrides")
+        if isinstance(model_overrides, dict) and "debate" in model_overrides:
+            return False
+        conflicts = context.get("conflicts")
+        if isinstance(conflicts, list) and not conflicts:
+            return True
+        if isinstance(conflicts, list) and conflicts and context.get("host_hints"):
+            return True
+        role_outputs = context.get("role_outputs")
+        if not isinstance(role_outputs, list) or len(role_outputs) < 2:
+            return False
+        stances = {str(item.get("stance")) for item in role_outputs if isinstance(item, dict) and item.get("stance")}
+        return len(stances) <= 1
 
     def _chat_completions_url(self, base_url: str | None) -> str:
         if not base_url:

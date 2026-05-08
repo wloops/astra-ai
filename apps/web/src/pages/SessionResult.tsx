@@ -11,7 +11,7 @@ import {
   User,
 } from "lucide-react";
 import { apiClient } from "../api/client";
-import type { SessionResult as SessionResultData } from "../api/types";
+import type { ScenarioTemplate, SessionResult as SessionResultData } from "../api/types";
 import { Navbar } from "../components/dashboard/Navbar";
 import { PromoteDialog } from "../components/tasks/PromoteDialog";
 
@@ -25,6 +25,7 @@ export function SessionResult() {
   const [searchParams] = useSearchParams();
   const sessionId = searchParams.get("sessionId") ?? "";
   const [result, setResult] = useState<SessionResultData | null>(null);
+  const [scenario, setScenario] = useState<ScenarioTemplate | null>(null);
   const [isLoading, setIsLoading] = useState(Boolean(sessionId));
   const [error, setError] = useState<string | null>(null);
   const [promoteOpen, setPromoteOpen] = useState(false);
@@ -38,8 +39,15 @@ export function SessionResult() {
       try {
         setIsLoading(true);
         setError(null);
-        const data = await apiClient.getSessionResult(sessionId);
-        if (!cancelled) setResult(data);
+        const [data, sessionData, scenarioList] = await Promise.all([
+          apiClient.getSessionResult(sessionId),
+          apiClient.getSession(sessionId),
+          apiClient.listScenarioTemplates(),
+        ]);
+        if (!cancelled) {
+          setResult(data);
+          setScenario(scenarioList.items.find((item) => item.id === sessionData.scenario_id) ?? null);
+        }
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : "结果尚未生成");
       } finally {
@@ -87,6 +95,12 @@ export function SessionResult() {
       </div>
     );
   }
+
+  const actualFlow = result.actual_flow ?? [];
+  const suggestedFlow = scenario?.stages ?? [];
+  const skippedStages = new Map((result.skipped_stages ?? []).map((item) => [item.stage, item.reason]));
+  const addedStages = new Set((result.added_stages ?? []).map((item) => item.stage));
+  const hasFlowData = actualFlow.length > 0;
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans">
@@ -137,6 +151,51 @@ export function SessionResult() {
             </div>
           </div>
         </div>
+
+        <section className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm mb-6">
+          <h3 className="flex items-center gap-2 text-slate-900 font-semibold mb-4">
+            <FileText className="w-5 h-5 text-blue-600" />
+            研讨流程
+          </h3>
+          {hasFlowData ? (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <div>
+                <div className="text-sm font-medium text-slate-700 mb-3">实际执行流程</div>
+                <div className="flex flex-wrap gap-2">
+                  {actualFlow.map((stage) => (
+                    <span
+                      key={stage}
+                      title={skippedStages.get(stage)}
+                      className={[
+                        "rounded-full px-3 py-1 text-xs font-medium",
+                        skippedStages.has(stage)
+                          ? "bg-slate-100 text-slate-500"
+                          : addedStages.has(stage)
+                            ? "bg-blue-50 text-blue-700"
+                            : "bg-emerald-50 text-emerald-700",
+                      ].join(" ")}
+                    >
+                      {stage}
+                      {skippedStages.has(stage) ? " · 已跳过" : addedStages.has(stage) ? " · 新增" : ""}
+                    </span>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <div className="text-sm font-medium text-slate-700 mb-3">场景建议流程</div>
+                <div className="flex flex-wrap gap-2">
+                  {suggestedFlow.map((stage) => (
+                    <span key={stage} className="rounded-full bg-slate-50 px-3 py-1 text-xs font-medium text-slate-600">
+                      {stage}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-slate-500">该研讨使用旧版流程，暂无流程对比数据。</p>
+          )}
+        </section>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
           <section className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm">

@@ -461,7 +461,8 @@ def create_discussion_session(
         raise HTTPException(status_code=404, detail="Scenario template not found")
     role_ids = payload.role_ids
     if not role_ids:
-        roles = session.exec(select(AgentRole).where(AgentRole.code.in_(scenario.default_role_codes))).all()
+        # 未手选角色时先只放入 host，实际专家阵容交给 Host Agent 会前组队决定。
+        roles = session.exec(select(AgentRole).where(AgentRole.code == "host")).all()
         role_ids = [role.id for role in roles]
     discussion = DiscussionSession(**payload.model_dump(exclude={"role_ids"}), role_ids=role_ids, user_id=current_user.id)
     session.add(discussion)

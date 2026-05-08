@@ -30,6 +30,13 @@ class EventType(StrEnum):
     CONFLICT_DETECTED = "conflict_detected"
     TOOL_EVENT = "tool_event"
     STAGE_COMPLETED = "stage_completed"
+    HOST_DECISION = "host_decision"
+    STAGE_SKIPPED = "stage_skipped"
+    STAGE_ADDED = "stage_added"
+    ROLE_PULLED = "role_pulled"
+    ROLE_REMOVED = "role_removed"
+    PARALLEL_START = "parallel_start"
+    PARALLEL_COMPLETE = "parallel_complete"
     SESSION_COMPLETED = "session_completed"
     SESSION_FAILED = "session_failed"
 
@@ -103,6 +110,8 @@ class ScenarioTemplateBase(SQLModel):
     code: str = Field(index=True, unique=True)
     description: str = ""
     stages: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    host_hints: str = ""
+    parallel_groups: list[list[str]] = Field(default_factory=list, sa_column=Column(JSON))
     default_role_codes: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     output_schema: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     recommended_tools: list[str] = Field(default_factory=list, sa_column=Column(JSON))
@@ -154,6 +163,9 @@ class SessionResult(SQLModel, table=True):
     risks: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
     open_questions: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     actions: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
+    actual_flow: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    skipped_stages: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
+    added_stages: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
     markdown_minutes: str
     created_at: datetime = Field(default_factory=utc_now)
 

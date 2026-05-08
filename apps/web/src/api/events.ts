@@ -8,6 +8,13 @@ const SESSION_EVENT_TYPES: SessionEventType[] = [
   "conflict_detected",
   "tool_event",
   "stage_completed",
+  "host_decision",
+  "stage_skipped",
+  "stage_added",
+  "role_pulled",
+  "role_removed",
+  "parallel_start",
+  "parallel_complete",
   "session_completed",
   "session_failed",
 ];

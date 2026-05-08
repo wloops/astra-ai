@@ -67,8 +67,25 @@ DEFAULT_SCENARIOS = [
             "generate_actions",
             "finalize_minutes",
         ],
+        host_hints=(
+            "Use the suggested stages as guidance. If independent review shows no major conflict, "
+            "skip debate and move to judgement. Pull in extra roles only when a missing expertise "
+            "would change the decision."
+        ),
+        parallel_groups=[["product_manager", "backend_architect", "qa_engineer"]],
         default_role_codes=["host", "product_manager", "backend_architect", "qa_engineer"],
-        output_schema=["final_conclusion", "key_conflicts", "role_summaries", "risks", "open_questions", "actions", "markdown_minutes"],
+        output_schema=[
+            "final_conclusion",
+            "key_conflicts",
+            "role_summaries",
+            "risks",
+            "open_questions",
+            "actions",
+            "actual_flow",
+            "skipped_stages",
+            "added_stages",
+            "markdown_minutes",
+        ],
         recommended_tools=["project_context", "tool_registry"],
     ),
     ScenarioTemplate(
@@ -86,8 +103,24 @@ DEFAULT_SCENARIOS = [
             "generate_actions",
             "finalize_minutes",
         ],
+        host_hints=(
+            "Prioritize architecture risk, integration boundaries, and validation evidence. "
+            "Use debate only when role outputs expose a material technical trade-off."
+        ),
+        parallel_groups=[["backend_architect", "product_manager", "qa_engineer"]],
         default_role_codes=["host", "backend_architect", "product_manager", "qa_engineer"],
-        output_schema=["final_conclusion", "key_conflicts", "role_summaries", "risks", "open_questions", "actions", "markdown_minutes"],
+        output_schema=[
+            "final_conclusion",
+            "key_conflicts",
+            "role_summaries",
+            "risks",
+            "open_questions",
+            "actions",
+            "actual_flow",
+            "skipped_stages",
+            "added_stages",
+            "markdown_minutes",
+        ],
         recommended_tools=["project_context"],
     ),
 ]

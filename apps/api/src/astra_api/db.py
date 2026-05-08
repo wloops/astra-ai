@@ -15,6 +15,7 @@ def init_db() -> None:
     SQLModel.metadata.create_all(engine)
     migrate_sqlite_user_columns()
     migrate_sqlite_session_model_overrides()
+    migrate_sqlite_agentic_orchestration_columns()
 
 
 def migrate_sqlite_user_columns() -> None:
@@ -49,6 +50,34 @@ def migrate_sqlite_session_model_overrides() -> None:
         return
     with engine.begin() as connection:
         connection.execute(text("ALTER TABLE discussionsession ADD COLUMN model_overrides JSON DEFAULT '{}'"))
+
+
+def migrate_sqlite_agentic_orchestration_columns() -> None:
+    """Add nullable JSON/text columns introduced by Host Agent orchestration."""
+
+    if not settings.database_url.startswith("sqlite"):
+        return
+    inspector = inspect(engine)
+    table_names = set(inspector.get_table_names())
+    migrations = {
+        "scenariotemplate": {
+            "host_hints": "ALTER TABLE scenariotemplate ADD COLUMN host_hints VARCHAR DEFAULT ''",
+            "parallel_groups": "ALTER TABLE scenariotemplate ADD COLUMN parallel_groups JSON DEFAULT '[]'",
+        },
+        "sessionresult": {
+            "actual_flow": "ALTER TABLE sessionresult ADD COLUMN actual_flow JSON DEFAULT '[]'",
+            "skipped_stages": "ALTER TABLE sessionresult ADD COLUMN skipped_stages JSON DEFAULT '[]'",
+            "added_stages": "ALTER TABLE sessionresult ADD COLUMN added_stages JSON DEFAULT '[]'",
+        },
+    }
+    for table_name, statements in migrations.items():
+        if table_name not in table_names:
+            continue
+        columns = {column["name"] for column in inspector.get_columns(table_name)}
+        with engine.begin() as connection:
+            for column_name, statement in statements.items():
+                if column_name not in columns:
+                    connection.execute(text(statement))
 
 
 def get_session() -> Generator[Session, None, None]:

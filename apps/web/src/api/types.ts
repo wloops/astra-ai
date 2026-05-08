@@ -11,6 +11,13 @@ export type SessionEventType =
   | "conflict_detected"
   | "tool_event"
   | "stage_completed"
+  | "host_decision"
+  | "stage_skipped"
+  | "stage_added"
+  | "role_pulled"
+  | "role_removed"
+  | "parallel_start"
+  | "parallel_complete"
   | "session_completed"
   | "session_failed";
 
@@ -53,6 +60,8 @@ export interface ScenarioTemplate {
   code: string;
   description: string;
   stages: string[];
+  host_hints: string;
+  parallel_groups: string[][];
   default_role_codes: string[];
   output_schema: string[];
   recommended_tools: string[];
@@ -93,6 +102,33 @@ export interface SessionEvent {
   created_at: string;
 }
 
+export interface HostDecision {
+  action: "NEXT_STAGE" | "SKIP_STAGE" | "ADD_STAGE" | "PULL_ROLE" | "REMOVE_ROLE" | "PARALLEL_RUN" | "CONCLUDE";
+  reason: string;
+  stage?: string | null;
+  stage_name?: string | null;
+  stage_prompt?: string | null;
+  role_code?: string | null;
+  role_name?: string | null;
+  role_responsibility?: string | null;
+  roles?: string[];
+  phase?: "initial_planning" | "runtime";
+  selected_role_codes?: string[];
+  role_reasons?: Record<string, string>;
+  model_used?: string | null;
+}
+
+export interface SkippedStage {
+  stage: string;
+  reason: string;
+}
+
+export interface AddedStage {
+  stage: string;
+  reason: string;
+  stage_prompt?: string;
+}
+
 export interface SessionResult {
   id: string;
   session_id: string;
@@ -102,6 +138,9 @@ export interface SessionResult {
   risks: Record<string, unknown>[];
   open_questions: string[];
   actions: Record<string, unknown>[];
+  actual_flow?: string[];
+  skipped_stages?: SkippedStage[];
+  added_stages?: AddedStage[];
   markdown_minutes: string;
   created_at: string;
 }

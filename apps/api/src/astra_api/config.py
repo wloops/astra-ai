@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     rate_limit_enabled: bool = True
     event_poll_interval_seconds: float = 0.5
     llm_timeout_seconds: float = 60.0
+    orchestration_max_iterations: int = 20
+    orchestration_no_progress_limit: int = 3
+    orchestration_timeout_seconds: float = 600.0
 
     model_config = SettingsConfigDict(
         # 支持从仓库根目录启动，也支持把后端专用配置放在 apps/api/.env。

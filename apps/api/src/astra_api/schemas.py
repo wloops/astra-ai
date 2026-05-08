@@ -57,6 +57,8 @@ class ScenarioTemplateCreate(BaseModel):
     code: str
     description: str = ""
     stages: list[str] = []
+    host_hints: str = ""
+    parallel_groups: list[list[str]] = []
     default_role_codes: list[str] = []
     output_schema: list[str] = []
     recommended_tools: list[str] = []
@@ -125,6 +127,30 @@ class SessionMetrics(BaseModel):
     risk_label: str
 
 
+class HostDecision(BaseModel):
+    action: str
+    reason: str = ""
+    stage: str | None = None
+    stage_name: str | None = None
+    stage_prompt: str | None = None
+    role_code: str | None = None
+    role_name: str | None = None
+    role_responsibility: str | None = None
+    roles: list[str] = Field(default_factory=list)
+    model_used: str | None = None
+
+
+class SkippedStage(BaseModel):
+    stage: str
+    reason: str = ""
+
+
+class AddedStage(BaseModel):
+    stage: str
+    reason: str = ""
+    stage_prompt: str = ""
+
+
 class SessionRead(BaseModel):
     id: str
     user_id: str | None = None
@@ -154,6 +180,9 @@ class SessionResultRead(BaseModel):
     risks: list[dict[str, Any]]
     open_questions: list[str]
     actions: list[dict[str, Any]]
+    actual_flow: list[str] = []
+    skipped_stages: list[dict[str, Any]] = []
+    added_stages: list[dict[str, Any]] = []
     markdown_minutes: str
     created_at: datetime
 

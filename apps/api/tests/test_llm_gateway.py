@@ -335,3 +335,61 @@ async def test_local_fallback_per_role(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_reads_llm_timeout_from_config(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "llm_timeout_seconds", 30.0)
     assert settings.llm_timeout_seconds == 30.0
+
+
+@pytest.mark.asyncio
+async def test_local_host_decision_parallel_then_conclude(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "llm_base_url", None)
+    monkeypatch.setattr(settings, "llm_api_key", None)
+    gateway = LLMGateway()
+
+    decision = await gateway.host_decide(
+        topic="test",
+        project=Project(name="test"),
+        context={
+            "suggested_stages": ["init_session", "load_context", "independent_review", "finalize_minutes"],
+            "completed_stages": ["init_session", "load_context"],
+            "active_role_codes": ["host", "product_manager", "qa_engineer"],
+            "skipped_stages": [],
+        },
+    )
+    assert decision["action"] == "PARALLEL_RUN"
+    assert decision["stage"] == "independent_review"
+    assert decision["roles"] == ["product_manager", "qa_engineer"]
+
+    conclude = await gateway.host_decide(
+        topic="test",
+        project=Project(name="test"),
+        context={
+            "suggested_stages": ["init_session", "load_context", "finalize_minutes"],
+            "completed_stages": ["init_session", "load_context"],
+            "active_role_codes": ["host"],
+            "skipped_stages": [],
+        },
+    )
+    assert conclude["action"] == "CONCLUDE"
+
+
+@pytest.mark.asyncio
+async def test_local_initial_role_plan_preserves_user_roles_and_adds_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "llm_base_url", None)
+    monkeypatch.setattr(settings, "llm_api_key", None)
+
+    plan = await LLMGateway().plan_initial_roles(
+        topic="test",
+        project=Project(name="test"),
+        context={
+            "user_selected_role_codes": ["host", "product_manager"],
+            "default_role_codes": ["host", "product_manager", "backend_architect", "qa_engineer"],
+            "available_roles": [
+                {"code": "host"},
+                {"code": "product_manager"},
+                {"code": "backend_architect"},
+                {"code": "qa_engineer"},
+            ],
+        },
+    )
+
+    assert plan["phase"] == "initial_planning"
+    assert plan["selected_role_codes"] == ["host", "product_manager", "backend_architect", "qa_engineer"]
+    assert plan["role_reasons"]["product_manager"] == "用户已选择该角色"
