@@ -3,7 +3,7 @@ import json
 from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from slowapi import Limiter
@@ -17,7 +17,19 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from astra_api.config import settings
 from astra_api.db import get_session, init_db
-from astra_api.models import AgentRole, DiscussionSession, Project, ScenarioTemplate, SessionEvent, SessionResult
+from astra_api.models import (
+    AgentRole,
+    DiscussionSession,
+    Project,
+    ScenarioTemplate,
+    SessionEvent,
+    SessionResult,
+    SessionStatus,
+    Task,
+    TaskPriority,
+    TaskStatus,
+    utc_now,
+)
 from astra_api.orchestrator import run_session_workflow
 from astra_api.metrics import compute_session_metrics
 from astra_api.schemas import (
@@ -26,12 +38,17 @@ from astra_api.schemas import (
     PaginatedResponse,
     ProjectCreate,
     ProjectRead,
+    PromoteRequest,
+    PromoteResponse,
     ScenarioTemplateCreate,
     ScenarioTemplateRead,
     SessionCreate,
     SessionMetrics,
     SessionRead,
     SessionResultRead,
+    TaskCreate,
+    TaskRead,
+    TaskUpdate,
 )
 from astra_api.seed import seed_defaults
 
@@ -49,6 +66,20 @@ def _parse_cors_origins(raw_origins: str) -> list[str]:
 
     origins = [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
     return origins or ["*"]
+
+
+def verify_api_key(
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+    api_key: str | None = Query(default=None),
+) -> None:
+    """Use one replaceable dependency for current API key auth and future auth upgrades."""
+
+    expected_key = settings.api_key.strip()
+    if not expected_key:
+        return
+    supplied_key = x_api_key or api_key
+    if supplied_key != expected_key:
+        raise HTTPException(status_code=401, detail="Invalid API key")
 
 
 class SecurityHeadersMiddleware:
@@ -114,13 +145,16 @@ if settings.rate_limit_enabled:
     app.add_middleware(SlowAPIMiddleware)
 
 
+api_router = APIRouter(dependencies=[Depends(verify_api_key)])
+
+
 @app.get("/health")
 @limiter.exempt
 def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/projects", response_model=PaginatedResponse[ProjectRead])
+@api_router.get("/projects", response_model=PaginatedResponse[ProjectRead])
 def list_projects(
     offset: int = 0,
     limit: int = 50,
@@ -133,7 +167,7 @@ def list_projects(
     return {"items": items, "total": len(total), "offset": offset, "limit": limit}
 
 
-@app.post("/projects", response_model=ProjectRead)
+@api_router.post("/projects", response_model=ProjectRead)
 def create_project(payload: ProjectCreate, session: Session = Depends(get_session)) -> Project:
     project = Project(**payload.model_dump())
     session.add(project)
@@ -142,7 +176,7 @@ def create_project(payload: ProjectCreate, session: Session = Depends(get_sessio
     return project
 
 
-@app.put("/projects/{project_id}", response_model=ProjectRead)
+@api_router.put("/projects/{project_id}", response_model=ProjectRead)
 def update_project(project_id: str, payload: ProjectCreate, session: Session = Depends(get_session)) -> Project:
     project = session.get(Project, project_id)
     if project is None:
@@ -155,7 +189,7 @@ def update_project(project_id: str, payload: ProjectCreate, session: Session = D
     return project
 
 
-@app.delete("/projects/{project_id}")
+@api_router.delete("/projects/{project_id}")
 def delete_project(project_id: str, session: Session = Depends(get_session)) -> dict:
     project = session.get(Project, project_id)
     if project is None:
@@ -165,7 +199,7 @@ def delete_project(project_id: str, session: Session = Depends(get_session)) -> 
     return {"status": "deleted", "id": project_id}
 
 
-@app.get("/agent-roles", response_model=PaginatedResponse[AgentRoleRead])
+@api_router.get("/agent-roles", response_model=PaginatedResponse[AgentRoleRead])
 def list_agent_roles(
     offset: int = 0,
     limit: int = 50,
@@ -178,7 +212,7 @@ def list_agent_roles(
     return {"items": items, "total": len(total), "offset": offset, "limit": limit}
 
 
-@app.post("/agent-roles", response_model=AgentRoleRead)
+@api_router.post("/agent-roles", response_model=AgentRoleRead)
 def create_agent_role(payload: AgentRoleCreate, session: Session = Depends(get_session)) -> AgentRole:
     role = AgentRole(**payload.model_dump())
     session.add(role)
@@ -187,7 +221,7 @@ def create_agent_role(payload: AgentRoleCreate, session: Session = Depends(get_s
     return role
 
 
-@app.put("/agent-roles/{role_id}", response_model=AgentRoleRead)
+@api_router.put("/agent-roles/{role_id}", response_model=AgentRoleRead)
 def update_agent_role(role_id: str, payload: AgentRoleCreate, session: Session = Depends(get_session)) -> AgentRole:
     role = session.get(AgentRole, role_id)
     if role is None:
@@ -200,7 +234,7 @@ def update_agent_role(role_id: str, payload: AgentRoleCreate, session: Session =
     return role
 
 
-@app.delete("/agent-roles/{role_id}")
+@api_router.delete("/agent-roles/{role_id}")
 def delete_agent_role(role_id: str, session: Session = Depends(get_session)) -> dict:
     role = session.get(AgentRole, role_id)
     if role is None:
@@ -210,7 +244,7 @@ def delete_agent_role(role_id: str, session: Session = Depends(get_session)) -> 
     return {"status": "deleted", "id": role_id}
 
 
-@app.get("/scenario-templates", response_model=PaginatedResponse[ScenarioTemplateRead])
+@api_router.get("/scenario-templates", response_model=PaginatedResponse[ScenarioTemplateRead])
 def list_scenario_templates(
     offset: int = 0,
     limit: int = 50,
@@ -223,7 +257,7 @@ def list_scenario_templates(
     return {"items": items, "total": len(total), "offset": offset, "limit": limit}
 
 
-@app.post("/scenario-templates", response_model=ScenarioTemplateRead)
+@api_router.post("/scenario-templates", response_model=ScenarioTemplateRead)
 def create_scenario_template(payload: ScenarioTemplateCreate, session: Session = Depends(get_session)) -> ScenarioTemplate:
     scenario = ScenarioTemplate(**payload.model_dump())
     session.add(scenario)
@@ -232,7 +266,7 @@ def create_scenario_template(payload: ScenarioTemplateCreate, session: Session =
     return scenario
 
 
-@app.put("/scenario-templates/{scenario_id}", response_model=ScenarioTemplateRead)
+@api_router.put("/scenario-templates/{scenario_id}", response_model=ScenarioTemplateRead)
 def update_scenario_template(scenario_id: str, payload: ScenarioTemplateCreate, session: Session = Depends(get_session)) -> ScenarioTemplate:
     tmpl = session.get(ScenarioTemplate, scenario_id)
     if tmpl is None:
@@ -245,7 +279,7 @@ def update_scenario_template(scenario_id: str, payload: ScenarioTemplateCreate, 
     return tmpl
 
 
-@app.delete("/scenario-templates/{scenario_id}")
+@api_router.delete("/scenario-templates/{scenario_id}")
 def delete_scenario_template(scenario_id: str, session: Session = Depends(get_session)) -> dict:
     tmpl = session.get(ScenarioTemplate, scenario_id)
     if tmpl is None:
@@ -255,7 +289,7 @@ def delete_scenario_template(scenario_id: str, session: Session = Depends(get_se
     return {"status": "deleted", "id": scenario_id}
 
 
-@app.post("/sessions", response_model=SessionRead)
+@api_router.post("/sessions", response_model=SessionRead)
 @limiter.limit("10/minute")
 def create_discussion_session(
     request: Request,
@@ -284,7 +318,7 @@ def create_discussion_session(
     return discussion
 
 
-@app.get("/sessions", response_model=PaginatedResponse[SessionRead])
+@api_router.get("/sessions", response_model=PaginatedResponse[SessionRead])
 def list_discussion_sessions(
     offset: int = 0,
     limit: int = 50,
@@ -297,7 +331,7 @@ def list_discussion_sessions(
     return {"items": items, "total": len(total), "offset": offset, "limit": limit}
 
 
-@app.get("/sessions/{session_id}", response_model=SessionRead)
+@api_router.get("/sessions/{session_id}", response_model=SessionRead)
 def get_discussion_session(session_id: str, session: Session = Depends(get_session)) -> dict:
     discussion = session.get(DiscussionSession, session_id)
     if discussion is None:
@@ -326,7 +360,7 @@ def get_discussion_session(session_id: str, session: Session = Depends(get_sessi
     return result
 
 
-@app.delete("/sessions/{session_id}")
+@api_router.delete("/sessions/{session_id}")
 def delete_discussion_session(session_id: str, session: Session = Depends(get_session)) -> dict:
     discussion = session.get(DiscussionSession, session_id)
     if discussion is None:
@@ -343,12 +377,173 @@ def delete_discussion_session(session_id: str, session: Session = Depends(get_se
     return {"status": "deleted", "id": session_id}
 
 
-@app.get("/sessions/{session_id}/result", response_model=SessionResultRead)
+@api_router.get("/sessions/{session_id}/result", response_model=SessionResultRead)
 def get_discussion_result(session_id: str, session: Session = Depends(get_session)) -> SessionResult:
     result = session.exec(select(SessionResult).where(SessionResult.session_id == session_id)).first()
     if result is None:
         raise HTTPException(status_code=404, detail="Session result not found")
     return result
+
+
+@api_router.get("/tasks", response_model=PaginatedResponse[TaskRead])
+def list_tasks(
+    offset: int = 0,
+    limit: int = 50,
+    project_id: str | None = None,
+    status: TaskStatus | None = None,
+    priority: TaskPriority | None = None,
+    session: Session = Depends(get_session),
+) -> dict:
+    statement = select(Task)
+    if project_id:
+        statement = statement.where(Task.project_id == project_id)
+    if status:
+        statement = statement.where(Task.status == status)
+    if priority:
+        statement = statement.where(Task.priority == priority)
+
+    total = session.exec(statement).all()
+    items = session.exec(statement.order_by(Task.updated_at.desc()).offset(offset).limit(limit)).all()
+    return {"items": items, "total": len(total), "offset": offset, "limit": limit}
+
+
+@api_router.get("/tasks/{task_id}", response_model=TaskRead)
+def get_task(task_id: str, session: Session = Depends(get_session)) -> Task:
+    task = session.get(Task, task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return task
+
+
+@api_router.post("/tasks", response_model=TaskRead)
+def create_task(payload: TaskCreate, session: Session = Depends(get_session)) -> Task:
+    if session.get(Project, payload.project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    task = Task(**payload.model_dump())
+    session.add(task)
+    session.commit()
+    session.refresh(task)
+    return task
+
+
+@api_router.put("/tasks/{task_id}", response_model=TaskRead)
+def update_task(task_id: str, payload: TaskUpdate, session: Session = Depends(get_session)) -> Task:
+    task = session.get(Task, task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    updates = payload.model_dump(exclude_unset=True)
+    if "project_id" in updates and updates["project_id"] and session.get(Project, updates["project_id"]) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    for key, value in updates.items():
+        setattr(task, key, value)
+    now = utc_now()
+    task.updated_at = now
+    if "status" in updates:
+        # completed_at records the first transition into done and is cleared when reopened.
+        task.completed_at = now if updates["status"] == TaskStatus.DONE else None
+    session.add(task)
+    session.commit()
+    session.refresh(task)
+    return task
+
+
+@api_router.delete("/tasks/{task_id}")
+def delete_task(task_id: str, session: Session = Depends(get_session)) -> dict:
+    task = session.get(Task, task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    session.delete(task)
+    session.commit()
+    return {"status": "deleted", "id": task_id}
+
+
+def _action_text(action: dict[str, object], key: str, fallback = "") -> str:
+    value = action.get(key)
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return fallback
+    return str(value)
+
+
+def _priority_from_action(action: dict[str, object]) -> TaskPriority:
+    raw_priority = _action_text(action, "priority", TaskPriority.MEDIUM).lower()
+    aliases = {
+        "p0": TaskPriority.CRITICAL,
+        "critical": TaskPriority.CRITICAL,
+        "high": TaskPriority.HIGH,
+        "medium": TaskPriority.MEDIUM,
+        "low": TaskPriority.LOW,
+        "高": TaskPriority.HIGH,
+        "中": TaskPriority.MEDIUM,
+        "低": TaskPriority.LOW,
+    }
+    return aliases.get(raw_priority, TaskPriority.MEDIUM)
+
+
+def _task_from_action(project_id: str, session_id: str, action: dict[str, object]) -> Task:
+    title = _action_text(action, "title", "未命名行动项").strip() or "未命名行动项"
+    description = _action_text(action, "description", _action_text(action, "detail"))
+    owner = _action_text(action, "owner", _action_text(action, "assignee_role_code")) or None
+    return Task(
+        project_id=project_id,
+        source_session_id=session_id,
+        title=title,
+        description=description,
+        priority=_priority_from_action(action),
+        assignee_role_code=owner,
+        tags=["promoted-action"],
+    )
+
+
+@api_router.post("/sessions/{session_id}/promote-actions", response_model=PromoteResponse)
+def promote_actions(
+    session_id: str,
+    payload: PromoteRequest | None = None,
+    session: Session = Depends(get_session),
+) -> dict:
+    discussion = session.get(DiscussionSession, session_id)
+    if discussion is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if discussion.status != SessionStatus.COMPLETED:
+        raise HTTPException(status_code=400, detail="Session is not completed")
+    result = session.exec(select(SessionResult).where(SessionResult.session_id == session_id)).first()
+    if result is None:
+        raise HTTPException(status_code=404, detail="Session result not found")
+
+    actions = result.actions
+    requested_indices = payload.action_indices if payload and payload.action_indices is not None else None
+    indices = requested_indices if requested_indices is not None else list(range(len(actions)))
+    tasks: list[Task] = []
+    skipped_actions: list[dict[str, object]] = []
+
+    for index in indices:
+        if index < 0 or index >= len(actions):
+            skipped_actions.append({"index": index, "reason": "index_out_of_range"})
+            continue
+        action = actions[index]
+        title = _action_text(action, "title", "未命名行动项").strip() or "未命名行动项"
+        existing = session.exec(
+            select(Task)
+            .where(Task.source_session_id == session_id)
+            .where(Task.title == title)
+        ).first()
+        if existing is not None:
+            skipped_actions.append({"index": index, "title": title, "reason": "already_promoted"})
+            continue
+        task = _task_from_action(discussion.project_id, session_id, action)
+        session.add(task)
+        tasks.append(task)
+
+    session.commit()
+    for task in tasks:
+        session.refresh(task)
+    return {
+        "created": len(tasks),
+        "skipped": len(skipped_actions),
+        "tasks": tasks,
+        "skipped_actions": skipped_actions,
+    }
 
 
 def _format_sse(event: SessionEvent) -> str:
@@ -387,6 +582,9 @@ async def _event_stream(session_id: str) -> AsyncGenerator[str, None]:
         await asyncio.sleep(settings.event_poll_interval_seconds)
 
 
-@app.get("/sessions/{session_id}/events")
+@api_router.get("/sessions/{session_id}/events")
 async def stream_session_events(session_id: str) -> StreamingResponse:
     return StreamingResponse(_event_stream(session_id), media_type="text/event-stream")
+
+
+app.include_router(api_router)

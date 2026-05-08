@@ -1,20 +1,37 @@
 import React from "react";
+import { Link } from "react-router-dom";
 import { cn } from "../../lib/utils";
-import type { DiscussionSession, Project } from "../../api/types";
+import type { DiscussionSession, Project, Task } from "../../api/types";
 
 interface RecommendedStepsProps {
   sessions?: DiscussionSession[];
   projects?: Project[];
+  tasks?: Task[];
 }
 
-export function RecommendedSteps({ sessions: externalSessions, projects: externalProjects }: RecommendedStepsProps) {
+export function RecommendedSteps({ sessions: externalSessions, projects: externalProjects, tasks: externalTasks }: RecommendedStepsProps) {
   const sessions = externalSessions ?? [];
   const projects = externalProjects ?? [];
+  const tasks = externalTasks ?? [];
 
   const completedCount = sessions.filter((s) => s.status === "completed").length;
   const lowCompletenessProjects = projects.filter((p) => p.completeness < 60);
+  const activeTaskCount = tasks.filter((task) => task.status === "todo" || task.status === "in_progress").length;
 
   const steps = [
+    ...(activeTaskCount > 0 ? [{
+      title: "执行待办任务",
+      desc: `当前有 ${activeTaskCount} 个待推进任务需要处理`,
+      btnText: "去看板",
+      href: "/task-board",
+      iconColor: "text-blue-600",
+      iconBg: "bg-blue-50",
+      icon: (
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+          <path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+        </svg>
+      ),
+    }] : []),
     {
       title: lowCompletenessProjects.length > 0 ? "完善项目上下文" : "发起新的研讨",
       desc:
@@ -22,6 +39,7 @@ export function RecommendedSteps({ sessions: externalSessions, projects: externa
           ? `还有 ${lowCompletenessProjects.length} 个项目上下文完整度不足60%`
           : "发起一场多 Agent 智能研讨，验证产品功能",
       btnText: lowCompletenessProjects.length > 0 ? "去完善" : "去发起",
+      href: lowCompletenessProjects.length > 0 ? "/project-context" : "/start-session",
       iconColor: "text-teal-600",
       iconBg: "bg-teal-50",
       icon: (
@@ -35,6 +53,7 @@ export function RecommendedSteps({ sessions: externalSessions, projects: externa
       title: "查看会议历史",
       desc: completedCount > 0 ? `已有 ${completedCount} 次完成的研讨，回顾历史结论` : "会议历史为空，完成首次研讨后即可查看",
       btnText: "去查看",
+      href: "/session-history",
       iconColor: "text-orange-500",
       iconBg: "bg-orange-50",
       icon: (
@@ -48,6 +67,7 @@ export function RecommendedSteps({ sessions: externalSessions, projects: externa
       title: "管理角色与场景",
       desc: "配置 Agent 角色和场景模板以适配你的业务需求",
       btnText: "去配置",
+      href: "/role-config",
       iconColor: "text-purple-600",
       iconBg: "bg-purple-50",
       icon: (
@@ -85,9 +105,9 @@ export function RecommendedSteps({ sessions: externalSessions, projects: externa
                 {step.desc}
               </p>
             </div>
-            <button className="shrink-0 text-xs font-medium text-blue-600 hover:bg-blue-50 px-3 py-1.5 rounded-full border border-blue-100 transition-colors">
+            <Link to={step.href} className="shrink-0 text-xs font-medium text-blue-600 hover:bg-blue-50 px-3 py-1.5 rounded-full border border-blue-100 transition-colors">
               {step.btnText}
-            </button>
+            </Link>
           </div>
         ))}
 

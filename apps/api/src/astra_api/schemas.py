@@ -3,7 +3,7 @@ from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, ConfigDict
 
-from astra_api.models import EventType, SessionStatus
+from astra_api.models import EventType, SessionStatus, TaskPriority, TaskStatus
 
 T = TypeVar("T")
 
@@ -137,3 +137,56 @@ class SessionResultRead(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class TaskCreate(BaseModel):
+    project_id: str
+    source_session_id: str | None = None
+    title: str
+    description: str = ""
+    status: TaskStatus = TaskStatus.TODO
+    priority: TaskPriority = TaskPriority.MEDIUM
+    assignee_role_code: str | None = None
+    due_date: datetime | None = None
+    tags: list[str] = []
+
+
+class TaskUpdate(BaseModel):
+    project_id: str | None = None
+    source_session_id: str | None = None
+    title: str | None = None
+    description: str | None = None
+    status: TaskStatus | None = None
+    priority: TaskPriority | None = None
+    assignee_role_code: str | None = None
+    due_date: datetime | None = None
+    tags: list[str] | None = None
+
+
+class TaskRead(BaseModel):
+    id: str
+    project_id: str
+    source_session_id: str | None
+    title: str
+    description: str
+    status: TaskStatus
+    priority: TaskPriority
+    assignee_role_code: str | None
+    due_date: datetime | None
+    tags: list[str]
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PromoteRequest(BaseModel):
+    action_indices: list[int] | None = None
+
+
+class PromoteResponse(BaseModel):
+    created: int
+    skipped: int
+    tasks: list[TaskRead]
+    skipped_actions: list[dict[str, Any]] = []

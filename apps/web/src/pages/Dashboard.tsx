@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Users, Folder, CheckSquare, ClipboardCheck } from "lucide-react";
+import { Users, Folder, CheckSquare, ClipboardCheck, ListTodo, AlertTriangle } from "lucide-react";
 import { Navbar } from "../components/dashboard/Navbar";
 import { Header } from "../components/dashboard/Header";
 import { StatsCards } from "../components/dashboard/StatsCards";
@@ -10,11 +10,12 @@ import { EfficiencyOverview } from "../components/dashboard/EfficiencyOverview";
 import { RecommendedSteps } from "../components/dashboard/RecommendedSteps";
 import { ErrorBanner } from "../components/common/ErrorBanner";
 import { apiClient } from "../api/client";
-import type { Project, DiscussionSession } from "../api/types";
+import type { Project, DiscussionSession, Task } from "../api/types";
 
 export function Dashboard() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [sessions, setSessions] = useState<DiscussionSession[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -22,12 +23,14 @@ export function Dashboard() {
     setLoading(true);
     setLoadError(null);
     try {
-      const [p, s] = await Promise.all([
+      const [p, s, t] = await Promise.all([
         apiClient.listProjects(),
         apiClient.listSessions(),
+        apiClient.listTasks({ limit: 200 }),
       ]);
       setProjects(p.items);
       setSessions(s.items);
+      setTasks(t.items);
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : "加载数据失败");
     } finally {
@@ -44,6 +47,11 @@ export function Dashboard() {
   const completedSessions = sessions.filter((s) => s.status === "completed").length;
   const runningSessions = sessions.filter((s) => s.status === "running").length;
   const totalProjects = projects.length;
+  const activeTasks = tasks.filter((task) => task.status === "todo" || task.status === "in_progress").length;
+  const overdueTasks = tasks.filter((task) => {
+    if (!task.due_date || task.status === "done" || task.status === "cancelled") return false;
+    return new Date(task.due_date).getTime() < Date.now();
+  }).length;
 
   const stats = loading
     ? undefined
@@ -76,6 +84,20 @@ export function Dashboard() {
           iconBg: "bg-orange-50",
           iconColor: "text-orange-500",
         },
+        {
+          title: "进行中任务",
+          value: String(activeTasks),
+          icon: ListTodo,
+          iconBg: "bg-emerald-50",
+          iconColor: "text-emerald-600",
+        },
+        {
+          title: "已逾期任务",
+          value: String(overdueTasks),
+          icon: AlertTriangle,
+          iconBg: "bg-red-50",
+          iconColor: "text-red-600",
+        },
       ];
 
   return (
@@ -103,7 +125,7 @@ export function Dashboard() {
           {/* Right Sidebar */}
           <aside className="w-full xl:w-[380px] shrink-0 flex flex-col gap-6">
             <EfficiencyOverview sessions={sessions} projects={projects} />
-            <RecommendedSteps sessions={sessions} projects={projects} />
+            <RecommendedSteps sessions={sessions} projects={projects} tasks={tasks} />
           </aside>
         </div>
       </main>

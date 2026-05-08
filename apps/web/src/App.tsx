@@ -11,6 +11,7 @@ import { RoleConfig } from './pages/RoleConfig';
 import { SessionHistory } from './pages/SessionHistory';
 import { ProjectContext } from './pages/ProjectContext';
 import { Workspace } from './pages/Workspace';
+import { TaskBoard } from './pages/TaskBoard';
 
 import { SessionResult } from './pages/SessionResult';
 
@@ -26,6 +27,7 @@ export default function App() {
         <Route path="/role-config" element={<RoleConfig />} />
         <Route path="/session-history" element={<SessionHistory />} />
         <Route path="/session-result" element={<SessionResult />} />
+        <Route path="/task-board" element={<TaskBoard />} />
       </Routes>
     </BrowserRouter>
   );

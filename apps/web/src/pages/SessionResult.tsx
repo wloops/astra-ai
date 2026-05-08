@@ -13,6 +13,7 @@ import {
 import { apiClient } from "../api/client";
 import type { SessionResult as SessionResultData } from "../api/types";
 import { Navbar } from "../components/dashboard/Navbar";
+import { PromoteDialog } from "../components/tasks/PromoteDialog";
 
 function text(value: unknown, fallback = ""): string {
   if (typeof value === "string") return value;
@@ -26,6 +27,8 @@ export function SessionResult() {
   const [result, setResult] = useState<SessionResultData | null>(null);
   const [isLoading, setIsLoading] = useState(Boolean(sessionId));
   const [error, setError] = useState<string | null>(null);
+  const [promoteOpen, setPromoteOpen] = useState(false);
+  const [promoteMessage, setPromoteMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -215,7 +218,19 @@ export function SessionResult() {
               <h3 className="flex items-center gap-2 text-slate-900 font-semibold mb-4">
                 <ListTodo className="w-5 h-5 text-blue-600" />
                 行动项
+                <button
+                  onClick={() => setPromoteOpen(true)}
+                  className="ml-auto rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white"
+                >
+                  转为任务
+                </button>
               </h3>
+              {promoteMessage && (
+                <div className="mb-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+                  {promoteMessage}
+                  <Link to="/task-board" className="ml-3 text-blue-700 hover:underline">查看任务看板</Link>
+                </div>
+              )}
               <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
                 <table className="w-full text-sm text-left">
                   <thead className="text-xs text-slate-500 bg-slate-50/80 border-b border-slate-200">
@@ -225,6 +240,7 @@ export function SessionResult() {
                       <th className="px-4 py-3 font-medium w-36">负责人</th>
                       <th className="px-4 py-3 font-medium w-28">优先级</th>
                       <th className="px-4 py-3 font-medium w-28">状态</th>
+                      <th className="px-4 py-3 font-medium w-28">操作</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -235,6 +251,18 @@ export function SessionResult() {
                         <td className="px-4 py-3 text-slate-600">{text(action.owner)}</td>
                         <td className="px-4 py-3 text-slate-600">{text(action.priority)}</td>
                         <td className="px-4 py-3 text-slate-600">{text(action.status)}</td>
+                        <td className="px-4 py-3">
+                          <button
+                            onClick={() => {
+                              apiClient.promoteActions(sessionId, [index]).then((response) => {
+                                setPromoteMessage(`已创建 ${response.created} 个任务，跳过 ${response.skipped} 个。`);
+                              });
+                            }}
+                            className="rounded-md border border-blue-100 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50"
+                          >
+                            转为任务
+                          </button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -257,6 +285,12 @@ export function SessionResult() {
           </section>
         </div>
       </main>
+      <PromoteDialog
+        open={promoteOpen}
+        actions={result.actions}
+        onClose={() => setPromoteOpen(false)}
+        onPromote={(indices) => apiClient.promoteActions(sessionId, indices)}
+      />
     </div>
   );
 }

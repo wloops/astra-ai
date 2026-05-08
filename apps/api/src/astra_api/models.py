@@ -34,6 +34,22 @@ class EventType(StrEnum):
     SESSION_FAILED = "session_failed"
 
 
+class TaskStatus(StrEnum):
+    BACKLOG = "backlog"
+    TODO = "todo"
+    IN_PROGRESS = "in_progress"
+    BLOCKED = "blocked"
+    DONE = "done"
+    CANCELLED = "cancelled"
+
+
+class TaskPriority(StrEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
 class ProjectBase(SQLModel):
     name: str
     description: str = ""
@@ -129,3 +145,22 @@ class SessionResult(SQLModel, table=True):
     actions: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
     markdown_minutes: str
     created_at: datetime = Field(default_factory=utc_now)
+
+
+class TaskBase(SQLModel):
+    project_id: str = Field(index=True)
+    source_session_id: str | None = Field(default=None, index=True)
+    title: str
+    description: str = ""
+    status: TaskStatus = Field(default=TaskStatus.TODO, index=True)
+    priority: TaskPriority = Field(default=TaskPriority.MEDIUM, index=True)
+    assignee_role_code: str | None = Field(default=None, index=True)
+    due_date: datetime | None = None
+    tags: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+
+
+class Task(TaskBase, table=True):
+    id: str = Field(default_factory=lambda: new_id("task"), primary_key=True)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+    completed_at: datetime | None = None

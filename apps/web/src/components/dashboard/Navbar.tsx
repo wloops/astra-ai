@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Search, Bell, ChevronDown, LayoutGrid, FileText, History, Users, Menu, X } from 'lucide-react'
+import { Search, Bell, ChevronDown, LayoutGrid, FileText, History, Users, Menu, X, KanbanSquare } from 'lucide-react'
 import { cn } from '../../lib/utils'
 
 interface NavbarProps {
@@ -13,6 +13,7 @@ export function Navbar({ activePage = '工作台' }: NavbarProps) {
   const navItems = [
     { name: '工作台', icon: LayoutGrid, path: '/dashboard' },
     { name: '项目上下文', icon: FileText, path: '/project-context' },
+    { name: '任务看板', icon: KanbanSquare, path: '/task-board' },
     { name: '会议历史', icon: History, path: '/session-history' },
     { name: '角色配置', icon: Users, path: '/role-config' },
   ]

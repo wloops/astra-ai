@@ -6,17 +6,27 @@ import type {
   ScenarioTemplate,
   SessionCreatePayload,
   SessionResult,
+  PromoteResponse,
+  Task,
+  TaskCreatePayload,
+  TaskPriority,
+  TaskStatus,
+  TaskUpdatePayload,
 } from "./types";
 
 export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8010").replace(/\/$/, "");
+export const API_KEY = (import.meta.env.VITE_API_KEY ?? "").trim();
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers);
+  headers.set("Content-Type", "application/json");
+  if (API_KEY) {
+    headers.set("X-API-Key", API_KEY);
+  }
+
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...init?.headers,
-    },
+    headers,
   });
 
   if (!response.ok) {
@@ -97,5 +107,36 @@ export const apiClient = {
   deleteSession: (id: string) =>
     request<{ status: string; id: string }>(`/sessions/${encodeURIComponent(id)}`, {
       method: "DELETE",
+    }),
+
+  // Tasks
+  listTasks: (params: { offset?: number; limit?: number; project_id?: string; status?: TaskStatus; priority?: TaskPriority } = {}) => {
+    const search = new URLSearchParams();
+    search.set("offset", String(params.offset ?? 0));
+    search.set("limit", String(params.limit ?? 50));
+    if (params.project_id) search.set("project_id", params.project_id);
+    if (params.status) search.set("status", params.status);
+    if (params.priority) search.set("priority", params.priority);
+    return request<PaginatedResponse<Task>>(`/tasks?${search.toString()}`);
+  },
+  getTask: (id: string) => request<Task>(`/tasks/${encodeURIComponent(id)}`),
+  createTask: (payload: TaskCreatePayload) =>
+    request<Task>("/tasks", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateTask: (id: string, payload: TaskUpdatePayload) =>
+    request<Task>(`/tasks/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  deleteTask: (id: string) =>
+    request<{ status: string; id: string }>(`/tasks/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+  promoteActions: (sessionId: string, actionIndices?: number[]) =>
+    request<PromoteResponse>(`/sessions/${encodeURIComponent(sessionId)}/promote-actions`, {
+      method: "POST",
+      body: JSON.stringify(actionIndices ? { action_indices: actionIndices } : {}),
     }),
 };

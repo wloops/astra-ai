@@ -1,5 +1,9 @@
 export type SessionStatus = "pending" | "running" | "completed" | "failed" | "paused";
 
+export type TaskStatus = "backlog" | "todo" | "in_progress" | "blocked" | "done" | "cancelled";
+
+export type TaskPriority = "low" | "medium" | "high" | "critical";
+
 export type SessionEventType =
   | "session_started"
   | "stage_started"
@@ -86,6 +90,45 @@ export interface SessionResult {
   actions: Record<string, unknown>[];
   markdown_minutes: string;
   created_at: string;
+}
+
+export interface Task {
+  id: string;
+  project_id: string;
+  source_session_id: string | null;
+  title: string;
+  description: string;
+  status: TaskStatus;
+  priority: TaskPriority;
+  assignee_role_code: string | null;
+  due_date: string | null;
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+}
+
+export interface TaskCreatePayload {
+  project_id: string;
+  source_session_id?: string | null;
+  title: string;
+  description?: string;
+  status?: TaskStatus;
+  priority?: TaskPriority;
+  assignee_role_code?: string | null;
+  due_date?: string | null;
+  tags?: string[];
+}
+
+export type TaskUpdatePayload = Partial<Omit<TaskCreatePayload, "project_id">> & {
+  project_id?: string;
+};
+
+export interface PromoteResponse {
+  created: number;
+  skipped: number;
+  tasks: Task[];
+  skipped_actions: Record<string, unknown>[];
 }
 
 export interface PaginatedResponse<T> {

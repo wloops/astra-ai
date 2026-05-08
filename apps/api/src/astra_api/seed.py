@@ -1,6 +1,6 @@
 from sqlmodel import Session, select
 
-from astra_api.models import AgentRole, Project, ScenarioTemplate
+from astra_api.models import AgentRole, Project, ScenarioTemplate, Task, TaskPriority, TaskStatus
 
 
 DEFAULT_ROLES = [
@@ -105,6 +105,29 @@ DEFAULT_PROJECT = Project(
 )
 
 
+def _default_tasks(project_id: str) -> list[Task]:
+    return [
+        Task(
+            project_id=project_id,
+            title="确认自动结算风控阈值",
+            description="把研讨结论中的金额、商户和重复提交规则整理为可配置阈值。",
+            status=TaskStatus.TODO,
+            priority=TaskPriority.HIGH,
+            assignee_role_code="product_manager",
+            tags=["seed", "risk-control"],
+        ),
+        Task(
+            project_id=project_id,
+            title="补充审计记录字段",
+            description="为自动结算链路保留必要审计字段，支撑财务回溯。",
+            status=TaskStatus.IN_PROGRESS,
+            priority=TaskPriority.MEDIUM,
+            assignee_role_code="backend_architect",
+            tags=["seed", "audit"],
+        ),
+    ]
+
+
 def seed_defaults(session: Session) -> None:
     if session.exec(select(AgentRole)).first() is None:
         session.add_all(DEFAULT_ROLES)
@@ -112,4 +135,8 @@ def seed_defaults(session: Session) -> None:
         session.add_all(DEFAULT_SCENARIOS)
     if session.exec(select(Project)).first() is None:
         session.add(DEFAULT_PROJECT)
+        session.commit()
+    project = session.exec(select(Project)).first()
+    if project is not None and session.exec(select(Task)).first() is None:
+        session.add_all(_default_tasks(project.id))
     session.commit()
