@@ -12,6 +12,7 @@ import { SessionHistory } from './pages/SessionHistory';
 import { ProjectContext } from './pages/ProjectContext';
 import { Workspace } from './pages/Workspace';
 import { TaskBoard } from './pages/TaskBoard';
+import { KnowledgeBase } from './pages/KnowledgeBase';
 import { SessionResult } from './pages/SessionResult';
 import { Login } from './pages/Login';
 import { Register } from './pages/Register';
@@ -41,6 +42,7 @@ function AppRoutes() {
       <Route path="/session-history" element={<SessionHistory />} />
       <Route path="/session-result" element={<SessionResult />} />
       <Route path="/task-board" element={<TaskBoard />} />
+      <Route path="/knowledge-base" element={<KnowledgeBase />} />
       <Route path="/login" element={<Navigate to="/dashboard" replace />} />
       <Route path="/register" element={<Navigate to="/dashboard" replace />} />
       <Route path="*" element={<Navigate to="/dashboard" replace />} />

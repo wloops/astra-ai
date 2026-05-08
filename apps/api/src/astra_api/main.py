@@ -32,6 +32,7 @@ from astra_api.auth import (
 from astra_api.models import (
     AgentRole,
     DiscussionSession,
+    KnowledgeEntry,
     Project,
     ScenarioTemplate,
     SessionEvent,
@@ -44,12 +45,22 @@ from astra_api.models import (
     utc_now,
 )
 from astra_api.orchestrator import run_session_workflow
+from astra_api.knowledge import (
+    backfill_missing_entries,
+    get_graph_data,
+    get_similar_entries,
+    list_entries as list_knowledge_entries,
+    search_entries,
+)
 from astra_api.metrics import compute_session_metrics
 from astra_api.llm_gateway import LLMGateway
 from astra_api.model_registry import list_available_profiles
 from astra_api.schemas import (
     AgentRoleCreate,
     AgentRoleRead,
+    KnowledgeEntryRead,
+    KnowledgeGraphData,
+    KnowledgeSearchResult,
     ModelProfile,
     ModelTestRequest,
     ModelTestResult,
@@ -130,6 +141,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
     init_db()
     with next(get_session()) as session:
         seed_defaults(session)
+    asyncio.create_task(backfill_missing_entries())
     yield
 
 
@@ -438,6 +450,90 @@ def delete_scenario_template(
     session.delete(tmpl)
     session.commit()
     return {"status": "deleted", "id": scenario_id}
+
+
+def _knowledge_result(entry: KnowledgeEntry, score: float | None) -> dict[str, object]:
+    return {"entry": entry, "similarity_score": score}
+
+
+@api_router.get("/knowledge/search", response_model=PaginatedResponse[KnowledgeSearchResult])
+async def search_knowledge(
+    q: str = "",
+    project_id: str | None = None,
+    scenario: str | None = None,
+    offset: int = 0,
+    limit: int = 20,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    results, total = await search_entries(
+        q,
+        current_user.id,
+        session,
+        project_id=project_id,
+        scenario=scenario,
+        offset=offset,
+        limit=limit,
+    )
+    return {
+        "items": [_knowledge_result(entry, score) for entry, score in results],
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+    }
+
+
+@api_router.get("/knowledge/similar", response_model=list[KnowledgeSearchResult])
+async def similar_knowledge(
+    topic: str,
+    limit: int = 3,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> list[dict[str, object]]:
+    results = await get_similar_entries(topic, current_user.id, session, limit=limit)
+    return [_knowledge_result(entry, score) for entry, score in results]
+
+
+@api_router.get("/knowledge/entries", response_model=PaginatedResponse[KnowledgeEntryRead])
+def list_knowledge(
+    offset: int = 0,
+    limit: int = 20,
+    project_id: str | None = None,
+    scenario: str | None = None,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    items, total = list_knowledge_entries(
+        session,
+        user_id=current_user.id,
+        offset=offset,
+        limit=limit,
+        project_id=project_id,
+        scenario=scenario,
+    )
+    return {"items": items, "total": total, "offset": offset, "limit": limit}
+
+
+@api_router.get("/knowledge/graph", response_model=KnowledgeGraphData)
+def knowledge_graph(
+    project_id: str | None = None,
+    limit: int = 50,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, list[dict[str, object]]]:
+    return get_graph_data(current_user.id, session, project_id=project_id, limit=limit)
+
+
+@api_router.get("/knowledge/entries/{entry_id}", response_model=KnowledgeEntryRead)
+def get_knowledge_entry(
+    entry_id: str,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> KnowledgeEntry:
+    entry = session.get(KnowledgeEntry, entry_id)
+    if entry is None or entry.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Knowledge entry not found")
+    return entry
 
 
 @api_router.post("/sessions", response_model=SessionRead)

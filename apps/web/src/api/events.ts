@@ -15,6 +15,7 @@ const SESSION_EVENT_TYPES: SessionEventType[] = [
   "role_removed",
   "parallel_start",
   "parallel_complete",
+  "knowledge_referenced",
   "session_completed",
   "session_failed",
 ];

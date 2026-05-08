@@ -170,6 +170,45 @@ describe("apiClient", () => {
     );
   });
 
+  it("knowledge API methods call expected endpoints", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ items: [], total: 0, offset: 0, limit: 20, nodes: [], edges: [] }),
+    } as Response);
+
+    await apiClient.searchKnowledge({ q: "alpha", project_id: "proj_1", scenario: "review", limit: 10 });
+    await apiClient.getSimilarEntries("alpha", 3);
+    await apiClient.getKnowledgeEntries({ project_id: "proj_1" });
+    await apiClient.getKnowledgeGraph({ project_id: "proj_1" });
+    await apiClient.getKnowledgeEntry("kb_1");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      `${API_BASE_URL}/knowledge/search?q=alpha&project_id=proj_1&scenario=review&offset=0&limit=10`,
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      `${API_BASE_URL}/knowledge/similar?topic=alpha&limit=3`,
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      `${API_BASE_URL}/knowledge/entries?offset=0&limit=20&project_id=proj_1`,
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      `${API_BASE_URL}/knowledge/graph?project_id=proj_1&limit=50`,
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      5,
+      `${API_BASE_URL}/knowledge/entries/kb_1`,
+      expect.any(Object),
+    );
+  });
+
   it("throws on non-ok response", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: false,

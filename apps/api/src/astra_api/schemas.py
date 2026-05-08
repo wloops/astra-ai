@@ -189,6 +189,75 @@ class SessionResultRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class KnowledgeEntryCreate(BaseModel):
+    source_session_id: str
+    project_id: str
+    user_id: str
+    scenario_code: str
+    topic: str
+    conclusion: str
+    key_conflicts: list[dict[str, Any]] = Field(default_factory=list)
+    role_summaries: list[dict[str, Any]] = Field(default_factory=list)
+    risks: list[dict[str, Any]] = Field(default_factory=list)
+    actions: list[dict[str, Any]] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    search_text: str
+
+
+class KnowledgeEntryRead(BaseModel):
+    id: str
+    source_session_id: str
+    project_id: str
+    user_id: str
+    scenario_code: str
+    topic: str
+    conclusion: str
+    key_conflicts: list[dict[str, Any]]
+    role_summaries: list[dict[str, Any]]
+    risks: list[dict[str, Any]]
+    actions: list[dict[str, Any]]
+    tags: list[str]
+    reference_count: int
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class KnowledgeSearchResult(BaseModel):
+    entry: KnowledgeEntryRead
+    similarity_score: float | None = None
+
+
+class KnowledgeReference(BaseModel):
+    entry_id: str
+    topic: str
+    conclusion: str
+    similarity_score: float | None = None
+
+
+class KnowledgeGraphNode(BaseModel):
+    id: str
+    topic: str
+    project_id: str
+    project: str
+    scenario: str
+    reference_count: int
+    created_at: datetime
+
+
+class KnowledgeGraphEdge(BaseModel):
+    source: str
+    target: str
+    type: str
+    weight: float
+
+
+class KnowledgeGraphData(BaseModel):
+    nodes: list[KnowledgeGraphNode]
+    edges: list[KnowledgeGraphEdge]
+
+
 class TaskCreate(BaseModel):
     project_id: str
     source_session_id: str | None = None

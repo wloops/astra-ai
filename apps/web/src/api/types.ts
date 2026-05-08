@@ -18,6 +18,7 @@ export type SessionEventType =
   | "role_removed"
   | "parallel_start"
   | "parallel_complete"
+  | "knowledge_referenced"
   | "session_completed"
   | "session_failed";
 
@@ -103,8 +104,9 @@ export interface SessionEvent {
 }
 
 export interface HostDecision {
-  action: "NEXT_STAGE" | "SKIP_STAGE" | "ADD_STAGE" | "PULL_ROLE" | "REMOVE_ROLE" | "PARALLEL_RUN" | "CONCLUDE";
+  action: "NEXT_STAGE" | "SKIP_STAGE" | "ADD_STAGE" | "SEARCH_KNOWLEDGE" | "PULL_ROLE" | "REMOVE_ROLE" | "PARALLEL_RUN" | "CONCLUDE";
   reason: string;
+  query?: string | null;
   stage?: string | null;
   stage_name?: string | null;
   stage_prompt?: string | null;
@@ -182,6 +184,60 @@ export interface PromoteResponse {
   skipped: number;
   tasks: Task[];
   skipped_actions: Record<string, unknown>[];
+}
+
+export interface KnowledgeEntry {
+  id: string;
+  source_session_id: string;
+  project_id: string;
+  user_id: string;
+  scenario_code: string;
+  topic: string;
+  conclusion: string;
+  key_conflicts: Record<string, unknown>[];
+  role_summaries: Record<string, unknown>[];
+  risks: Record<string, unknown>[];
+  actions: Record<string, unknown>[];
+  tags: string[];
+  reference_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface KnowledgeSearchResult {
+  entry: KnowledgeEntry;
+  similarity_score: number | null;
+}
+
+export interface KnowledgeReference {
+  entry_id: string;
+  source_session_id?: string;
+  topic: string;
+  conclusion: string;
+  key_conflicts?: Record<string, unknown>[];
+  similarity_score: number | null;
+}
+
+export interface KnowledgeGraphNode {
+  id: string;
+  topic: string;
+  project_id: string;
+  project: string;
+  scenario: string;
+  reference_count: number;
+  created_at: string;
+}
+
+export interface KnowledgeGraphEdge {
+  source: string;
+  target: string;
+  type: "SAME_PROJECT" | "SEMANTIC_SIMILAR" | "EXPLICIT_REFERENCE" | string;
+  weight: number;
+}
+
+export interface KnowledgeGraphData {
+  nodes: KnowledgeGraphNode[];
+  edges: KnowledgeGraphEdge[];
 }
 
 export interface User {

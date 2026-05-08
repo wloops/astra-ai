@@ -7,6 +7,7 @@ from sqlmodel import Session, select
 
 from astra_api.config import settings
 from astra_api.db import engine
+from astra_api.knowledge import create_entry, search_entries
 from astra_api.llm_gateway import LLMGateway
 from astra_api.models import (
     AgentRole,
@@ -43,6 +44,8 @@ class SessionState:
     skipped_stages: list[dict[str, Any]] = field(default_factory=list)
     added_stages: list[dict[str, Any]] = field(default_factory=list)
     failures: list[dict[str, Any]] = field(default_factory=list)
+    knowledge_references: list[dict[str, Any]] = field(default_factory=list)
+    knowledge_search_attempted: bool = False
     iteration: int = 0
     last_progress_iteration: int = 0
     host_decision_history: list[dict[str, Any]] = field(default_factory=list)
@@ -164,6 +167,9 @@ def _host_context(state: SessionState) -> dict[str, Any]:
         "open_questions": state.open_questions,
         "actions": state.actions,
         "failures": state.failures,
+        "knowledge_references": state.knowledge_references,
+        "knowledge_search_enabled": True,
+        "knowledge_search_attempted": state.knowledge_search_attempted,
         "model_overrides": state.model_overrides,
         "iteration": state.iteration,
     }
@@ -347,6 +353,8 @@ async def run_agentic_session(session_id: str) -> None:
             )
 
         progressed = await execute_decision(state, decision)
+        if decision.get("action") == "CONCLUDE":
+            return
         if progressed:
             _mark_progress(state)
         await _stage_pause()
@@ -372,6 +380,8 @@ async def execute_decision(state: SessionState, decision: dict[str, Any]) -> boo
         return skip_stage(state, str(decision.get("stage") or ""), str(decision.get("reason") or ""))
     if action == "ADD_STAGE":
         return await execute_ad_hoc_stage(state, decision)
+    if action == "SEARCH_KNOWLEDGE":
+        return await execute_knowledge_search(state, str(decision.get("query") or state.topic), str(decision.get("reason") or ""))
     if action == "PULL_ROLE":
         return pull_role(state, decision)
     if action == "REMOVE_ROLE":
@@ -381,6 +391,45 @@ async def execute_decision(state: SessionState, decision: dict[str, Any]) -> boo
         return True
     state.failures.append({"action": action, "reason": "unknown_action"})
     return False
+
+
+async def execute_knowledge_search(state: SessionState, query: str, reason: str) -> bool:
+    state.knowledge_search_attempted = True
+    with Session(engine, expire_on_commit=False) as db:
+        discussion = db.get(DiscussionSession, state.session_id)
+        user_id = discussion.user_id if discussion is not None and discussion.user_id else ""
+        results, _ = await search_entries(
+            query,
+            user_id,
+            db,
+            project_id=state.project.id,
+            limit=3,
+        )
+        matches: list[dict[str, Any]] = []
+        for entry, score in results:
+            entry.reference_count += 1
+            entry.updated_at = utc_now()
+            db.add(entry)
+            matches.append(
+                {
+                    "entry_id": entry.id,
+                    "source_session_id": entry.source_session_id,
+                    "topic": entry.topic,
+                    "conclusion": entry.conclusion[:240],
+                    "key_conflicts": entry.key_conflicts[:3],
+                    "similarity_score": score,
+                }
+            )
+        state.knowledge_references.append({"query": query, "reason": reason, "matches": matches})
+        record_event(
+            db,
+            session_id=state.session_id,
+            event_type=EventType.KNOWLEDGE_REFERENCED,
+            stage="knowledge_search",
+            role_code="host",
+            payload={"query": query, "reason": reason, "matches": matches, "model_used": None},
+        )
+    return True
 
 
 def skip_stage(state: SessionState, stage: str, reason: str) -> bool:
@@ -657,6 +706,7 @@ def _apply_stage_output(state: SessionState, stage: str, output: dict[str, Any])
 
 async def finalize_minutes(state: SessionState, termination_reason: str | None = None) -> None:
     if _has_result(state.session_id):
+        await create_entry(state.session_id)
         return
     if not state.final_conclusion:
         state.final_conclusion = "Session completed with partial outputs."
@@ -695,6 +745,7 @@ async def finalize_minutes(state: SessionState, termination_reason: str | None =
             stage="finalize_minutes",
             payload=payload,
         )
+    await create_entry(state.session_id)
 
 
 def _has_result(session_id: str) -> bool:

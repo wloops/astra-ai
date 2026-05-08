@@ -3,7 +3,7 @@ from enum import StrEnum
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import JSON, Column
+from sqlalchemy import JSON, Column, LargeBinary, UniqueConstraint
 from sqlmodel import Field, SQLModel
 
 
@@ -37,6 +37,7 @@ class EventType(StrEnum):
     ROLE_REMOVED = "role_removed"
     PARALLEL_START = "parallel_start"
     PARALLEL_COMPLETE = "parallel_complete"
+    KNOWLEDGE_REFERENCED = "knowledge_referenced"
     SESSION_COMPLETED = "session_completed"
     SESSION_FAILED = "session_failed"
 
@@ -168,6 +169,28 @@ class SessionResult(SQLModel, table=True):
     added_stages: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
     markdown_minutes: str
     created_at: datetime = Field(default_factory=utc_now)
+
+
+class KnowledgeEntry(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("source_session_id", name="uq_knowledgeentry_source_session_id"),)
+
+    id: str = Field(default_factory=lambda: new_id("kb"), primary_key=True)
+    source_session_id: str = Field(index=True)
+    project_id: str = Field(index=True)
+    user_id: str = Field(index=True)
+    scenario_code: str = Field(index=True)
+    topic: str = Field(index=True)
+    conclusion: str
+    key_conflicts: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
+    role_summaries: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
+    risks: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
+    actions: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
+    tags: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    search_text: str
+    embedding: bytes | None = Field(default=None, sa_column=Column(LargeBinary, nullable=True))
+    reference_count: int = 0
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
 
 class TaskBase(SQLModel):

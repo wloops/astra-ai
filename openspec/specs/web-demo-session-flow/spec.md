@@ -41,6 +41,15 @@
 - **THEN** 前端 SHALL 显示可理解的错误状态
 - **AND** SHALL 不跳转到会议进行页
 
+#### Scenario: 展示相似案例
+- **WHEN** 用户在议题输入框中输入超过 10 个字符
+- **THEN** 前端 SHALL 防抖后调用 `/knowledge/similar?topic=<topic>&limit=3`
+- **AND** SHALL 在表单下方展示相似案例卡片（标题、结论摘要、相似度百分比）
+
+#### Scenario: 相似案例查询失败不影响
+- **WHEN** 相似案例查询失败（如知识库为空或 API 异常）
+- **THEN** SHALL 静默忽略，不阻断用户发起研讨
+
 ### Requirement: 会议进行页消费 SSE
 
 前端会议进行页 SHALL 订阅后端 SSE 事件流并展示真实研讨过程，包括 Host Agent 决策、阶段跳过/新增、角色变更等新事件类型。阶段进度列表 SHALL 从事件流动态构建，不再硬编码固定阶段。
@@ -76,6 +85,16 @@
 - **WHEN** 前端收到 `session_completed` 事件
 - **THEN** 会议进行页 SHALL 提供进入结果页的入口
 - **AND** SHALL 携带当前 Session ID
+
+#### Scenario: 展示知识检索状态
+- **WHEN** Workspace 渲染右侧"活跃进程与工具"面板
+- **THEN** SHALL 展示"知识库检索"条目
+- **AND** 状态 SHALL 从假数据切换为实时事件驱动
+- **AND** 收到 `knowledge_referenced` 事件时 SHALL 更新状态为"已找到 N 个案例"
+
+#### Scenario: 知识检索未触发
+- **WHEN** Host Agent 尚未发起 SEARCH_KNOWLEDGE
+- **THEN** 展示"历史决策相似案例检索"条目状态 SHALL 为"等待中"
 
 ### Requirement: 会议结果页读取真实结果
 

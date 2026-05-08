@@ -15,7 +15,8 @@ import {
   Users,
 } from "lucide-react";
 import { apiClient } from "../../api/client";
-import type { AgentRole, ModelProfile, Project, ScenarioTemplate } from "../../api/types";
+import type { AgentRole, KnowledgeSearchResult, ModelProfile, Project, ScenarioTemplate } from "../../api/types";
+import { SimilarCases } from "../knowledge/SimilarCases";
 import { cn } from "../../lib/utils";
 import { ModelSelector } from "./ModelSelector";
 
@@ -36,6 +37,7 @@ export function StartSessionForm() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [similarCases, setSimilarCases] = useState<KnowledgeSearchResult[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -71,6 +73,25 @@ export function StartSessionForm() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (topic.trim().length <= 10) {
+      setSimilarCases([]);
+      return;
+    }
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      apiClient.getSimilarEntries(topic.trim(), 3, controller.signal)
+        .then(setSimilarCases)
+        .catch((err) => {
+          if (!(err instanceof DOMException && err.name === "AbortError")) setSimilarCases([]);
+        });
+    }, 500);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [topic]);
 
   const selectedProject = useMemo(() => projects.find((project) => project.id === projectId), [projects, projectId]);
   const selectedScenario = useMemo(
@@ -179,6 +200,7 @@ export function StartSessionForm() {
                 <div className="absolute bottom-3 right-3 text-xs text-slate-400 font-medium">
                   {topic.length}/500
                 </div>
+                <SimilarCases items={similarCases} />
               </div>
             </label>
           </div>

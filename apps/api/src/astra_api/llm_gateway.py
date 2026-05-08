@@ -40,8 +40,9 @@ STAGE_PROMPTS: dict[str, dict[str, Any]] = {
             "Return one JSON object only. Use concise Chinese for the user-facing reason."
         ),
         "schema": {
-            "action": "NEXT_STAGE | SKIP_STAGE | ADD_STAGE | PULL_ROLE | REMOVE_ROLE | PARALLEL_RUN | CONCLUDE",
+            "action": "NEXT_STAGE | SKIP_STAGE | ADD_STAGE | SEARCH_KNOWLEDGE | PULL_ROLE | REMOVE_ROLE | PARALLEL_RUN | CONCLUDE",
             "reason": "User-facing reason in Chinese",
+            "query": "Knowledge search query for SEARCH_KNOWLEDGE",
             "stage": "Existing stage for NEXT_STAGE/SKIP_STAGE/PARALLEL_RUN",
             "stage_name": "New stage name for ADD_STAGE",
             "stage_prompt": "Prompt for ADD_STAGE",
@@ -478,6 +479,7 @@ class LLMGateway:
             "NEXT_STAGE",
             "SKIP_STAGE",
             "ADD_STAGE",
+            "SEARCH_KNOWLEDGE",
             "PULL_ROLE",
             "REMOVE_ROLE",
             "PARALLEL_RUN",
@@ -490,6 +492,7 @@ class LLMGateway:
         return {
             "action": action,
             "reason": data.get("reason") if isinstance(data.get("reason"), str) else "",
+            "query": data.get("query") if isinstance(data.get("query"), str) else None,
             "stage": data.get("stage") if isinstance(data.get("stage"), str) else None,
             "stage_name": data.get("stage_name") if isinstance(data.get("stage_name"), str) else None,
             "stage_prompt": data.get("stage_prompt") if isinstance(data.get("stage_prompt"), str) else None,
@@ -505,6 +508,13 @@ class LLMGateway:
         completed = set(context.get("completed_stages", []))
         skipped = {item.get("stage") for item in context.get("skipped_stages", []) if isinstance(item, dict)}
         actionable = [stage for stage in suggested if stage not in {"init_session", "load_context", "finalize_minutes"}]
+        if context.get("knowledge_search_enabled") and not context.get("knowledge_search_attempted"):
+            return {
+                "action": "SEARCH_KNOWLEDGE",
+                "query": str(context.get("topic") or ""),
+                "reason": "先检索历史研讨知识，避免从零开始判断。",
+                "roles": [],
+            }
 
         for stage in actionable:
             if stage in completed or stage in skipped:
@@ -587,3 +597,33 @@ class LLMGateway:
         if url.endswith("/v1"):
             return f"{url}/chat/completions"
         return f"{url}/chat/completions"
+
+    def _embeddings_url(self, base_url: str | None) -> str:
+        if not base_url:
+            raise ValueError("LLM base URL is required")
+        url = base_url.rstrip("/")
+        if url.endswith("/embeddings"):
+            return url
+        if url.endswith("/v1"):
+            return f"{url}/embeddings"
+        return f"{url}/embeddings"
+
+    async def generate_embedding(self, text: str) -> list[float] | None:
+        """Generate an embedding, returning None when semantic search must degrade."""
+
+        if not settings.llm_base_url or not settings.llm_api_key or not text.strip():
+            return None
+        payload = {"model": settings.llm_embedding_model, "input": text}
+        headers = {"Authorization": f"Bearer {settings.llm_api_key}"}
+        try:
+            async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
+                response = await client.post(self._embeddings_url(settings.llm_base_url), json=payload, headers=headers)
+                response.raise_for_status()
+                data = response.json()
+            vector = data["data"][0]["embedding"]
+            if not isinstance(vector, list):
+                return None
+            return [float(item) for item in vector]
+        except Exception as exc:
+            logger.warning("embedding_call status=fallback error=%s", exc)
+            return None

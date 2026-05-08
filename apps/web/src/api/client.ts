@@ -2,6 +2,9 @@ import type {
   AgentRole,
   AuthPayload,
   DiscussionSession,
+  KnowledgeEntry,
+  KnowledgeGraphData,
+  KnowledgeSearchResult,
   ModelProfile,
   ModelTestResult,
   PaginatedResponse,
@@ -58,6 +61,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   return response.json() as Promise<T>;
+}
+
+function queryString(params: Record<string, string | number | undefined | null>): string {
+  const search = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") search.set(key, String(value));
+  });
+  return search.toString();
 }
 
 export const apiClient = {
@@ -181,4 +192,45 @@ export const apiClient = {
       method: "POST",
       body: JSON.stringify(actionIndices ? { action_indices: actionIndices } : {}),
     }),
+
+  // Knowledge Base
+  searchKnowledge: (
+    params: { q?: string; project_id?: string; scenario?: string; offset?: number; limit?: number },
+    signal?: AbortSignal,
+  ) =>
+    request<PaginatedResponse<KnowledgeSearchResult>>(
+      `/knowledge/search?${queryString({
+        q: params.q ?? "",
+        project_id: params.project_id,
+        scenario: params.scenario,
+        offset: params.offset ?? 0,
+        limit: params.limit ?? 20,
+      })}`,
+      { signal },
+    ),
+  getSimilarEntries: (topic: string, limit = 3, signal?: AbortSignal) =>
+    request<KnowledgeSearchResult[]>(
+      `/knowledge/similar?${queryString({ topic, limit })}`,
+      { signal },
+    ),
+  getKnowledgeEntries: (
+    params: { offset?: number; limit?: number; project_id?: string; scenario?: string } = {},
+    signal?: AbortSignal,
+  ) =>
+    request<PaginatedResponse<KnowledgeEntry>>(
+      `/knowledge/entries?${queryString({
+        offset: params.offset ?? 0,
+        limit: params.limit ?? 20,
+        project_id: params.project_id,
+        scenario: params.scenario,
+      })}`,
+      { signal },
+    ),
+  getKnowledgeGraph: (params: { project_id?: string; limit?: number } = {}, signal?: AbortSignal) =>
+    request<KnowledgeGraphData>(
+      `/knowledge/graph?${queryString({ project_id: params.project_id, limit: params.limit ?? 50 })}`,
+      { signal },
+    ),
+  getKnowledgeEntry: (id: string, signal?: AbortSignal) =>
+    request<KnowledgeEntry>(`/knowledge/entries/${encodeURIComponent(id)}`, { signal }),
 };

@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import { apiClient } from "../api/client";
 import { subscribeToSessionEvents } from "../api/events";
-import type { AgentRole, DiscussionSession, HostDecision, Project, ScenarioTemplate, SessionEvent } from "../api/types";
+import type { AgentRole, DiscussionSession, HostDecision, KnowledgeReference, Project, ScenarioTemplate, SessionEvent } from "../api/types";
 import { Navbar } from "../components/dashboard/Navbar";
 import { cn } from "../lib/utils";
 
@@ -123,6 +123,7 @@ function asHostDecision(payload: Record<string, unknown>): HostDecision {
   return {
     action: String(payload.action ?? "NEXT_STAGE") as HostDecision["action"],
     reason: asText(payload.reason),
+    query: typeof payload.query === "string" ? payload.query : null,
     stage: typeof payload.stage === "string" ? payload.stage : null,
     stage_name: typeof payload.stage_name === "string" ? payload.stage_name : null,
     stage_prompt: typeof payload.stage_prompt === "string" ? payload.stage_prompt : null,
@@ -414,8 +415,13 @@ export function Workspace() {
   const loadContextEvent = events.find((event) => event.type === "stage_completed" && event.stage === "load_context");
   const latestToolTime = loadContextEvent?.created_at ?? events[events.length - 1]?.created_at;
   const policyToolDone = Boolean(loadContextEvent || terminal);
-  const similarCaseToolDone = session?.status === "completed";
-  const similarCaseRunning = active;
+  const latestKnowledgeEvent = [...events].reverse().find((event) => event.type === "knowledge_referenced");
+  const knowledgeMatches = (
+    Array.isArray(latestKnowledgeEvent?.payload.matches) ? latestKnowledgeEvent?.payload.matches : []
+  ) as unknown as KnowledgeReference[];
+  const similarCaseToolDone = Boolean(latestKnowledgeEvent);
+  const similarCaseRunning = active && !latestKnowledgeEvent;
+  const similarCaseTime = latestKnowledgeEvent?.created_at ?? events[events.length - 1]?.created_at;
 
   if (!sessionId) {
     return (
@@ -784,7 +790,7 @@ export function Workspace() {
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-medium text-slate-700">历史决策相似案例检索</div>
-                  <div className="text-xs text-slate-400">{formatShortTime(events[events.length - 1]?.created_at)}</div>
+                  <div className="text-xs text-slate-400">{formatShortTime(similarCaseTime)}</div>
                 </div>
                 <span
                   className={cn(
@@ -797,9 +803,27 @@ export function Workspace() {
                   )}
                 >
                   {similarCaseRunning && <LoaderCircle className="w-3 h-3 animate-spin" />}
-                  {similarCaseToolDone ? "完成" : similarCaseRunning ? "运行中" : "待开始"}
+                  {similarCaseToolDone ? `找到 ${knowledgeMatches.length} 个案例` : similarCaseRunning ? "检索中" : "等待中"}
                 </span>
               </div>
+              {similarCaseToolDone && (
+                <div className="ml-11 space-y-2">
+                  {knowledgeMatches.length ? (
+                    knowledgeMatches.slice(0, 3).map((item) => (
+                      <Link
+                        key={item.entry_id}
+                        to={`/session-result?sessionId=${encodeURIComponent(item.source_session_id ?? "")}`}
+                        className="block rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 hover:border-blue-100 hover:bg-blue-50/50"
+                      >
+                        <div className="truncate text-xs font-medium text-slate-800">{item.topic}</div>
+                        <div className="mt-1 line-clamp-2 text-[11px] leading-4 text-slate-500">{item.conclusion}</div>
+                      </Link>
+                    ))
+                  ) : (
+                    <div className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-400">暂无匹配历史案例</div>
+                  )}
+                </div>
+              )}
             </div>
             <button
               onClick={() => sessionId && navigate(`/session-result?sessionId=${sessionId}`)}

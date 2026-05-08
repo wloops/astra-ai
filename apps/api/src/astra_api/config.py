@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     llm_base_url: str | None = None
     llm_api_key: str | None = None
     llm_model: str = "gpt-4o-mini"
+    llm_embedding_model: str = "text-embedding-3-small"
     llm_model_profiles: str = ""
     llm_stage_routing: str = ""
     llm_role_routing: str = ""
