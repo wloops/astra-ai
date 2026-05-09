@@ -27,6 +27,8 @@ class EventType(StrEnum):
     SESSION_STARTED = "session_started"
     STAGE_STARTED = "stage_started"
     AGENT_MESSAGE = "agent_message"
+    AGENT_MESSAGE_DELTA = "agent_message_delta"
+    AGENT_MESSAGE_DONE = "agent_message_done"
     CONFLICT_DETECTED = "conflict_detected"
     TOOL_EVENT = "tool_event"
     STAGE_COMPLETED = "stage_completed"

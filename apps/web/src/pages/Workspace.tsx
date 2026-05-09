@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   Bot,
   Check,
+  ChevronDown,
   Clock,
   Code2,
   Copy,
@@ -28,9 +29,12 @@ interface AgentMessage {
   roleName: string;
   stage: string;
   content: string;
+  targetContent: string;
   createdAt: string;
   roleCode: string | null;
   modelUsed?: string;
+  streaming?: boolean;
+  streamMode?: "single" | "none";
 }
 
 interface StageProgressItem {
@@ -47,6 +51,26 @@ interface StageDecisionSummary {
 }
 
 const roleIcons = [Bot, User, Code2, ShieldCheck];
+
+type RoleStatus = "waiting" | "speaking" | "spoken" | "parallel" | "failed" | "removed";
+
+const ROLE_STATUS_LABELS: Record<RoleStatus, string> = {
+  waiting: "等待中",
+  speaking: "发言中",
+  spoken: "已发言",
+  parallel: "并行处理中",
+  failed: "失败",
+  removed: "已移除",
+};
+
+const ROLE_STATUS_STYLES: Record<RoleStatus, string> = {
+  waiting: "bg-slate-50 text-slate-500 border-slate-100",
+  speaking: "bg-blue-50 text-blue-600 border-blue-100",
+  spoken: "bg-emerald-50 text-emerald-600 border-emerald-100",
+  parallel: "bg-indigo-50 text-indigo-600 border-indigo-100",
+  failed: "bg-red-50 text-red-600 border-red-100",
+  removed: "bg-slate-100 text-slate-400 border-slate-200",
+};
 
 function labelTone(label: string): string {
   if (label === "优秀") return "emerald";
@@ -119,6 +143,34 @@ function asText(value: unknown): string {
   return "";
 }
 
+function payloadText(payload: Record<string, unknown>, key: string): string {
+  const value = payload[key];
+  return typeof value === "string" ? value : "";
+}
+
+function eventRoleCode(event: SessionEvent): string | null {
+  return event.role_code ?? (typeof event.payload.role_code === "string" ? event.payload.role_code : null);
+}
+
+function revealNextChunk(content: string, target: string): string {
+  if (content.length >= target.length) return content;
+  return target.slice(0, Math.min(target.length, content.length + 4));
+}
+
+function stageWaitingPrompt(stage: string | null | undefined): string {
+  if (!stage) return "正在等待研讨继续...";
+  const prompts: Record<string, string> = {
+    clarify_topic: "主持人正在澄清议题...",
+    independent_review: "多位 Agent 正在并行独立评审...",
+    detect_conflict: "正在识别争议点...",
+    debate: "等待下一轮交叉辩论...",
+    judge_and_summarize: "主持人正在裁决总结...",
+    generate_actions: "正在生成行动项...",
+    finalize_minutes: "正在生成会议纪要...",
+  };
+  return prompts[stage] ?? `正在推进 ${stageLabel(stage)}...`;
+}
+
 function asHostDecision(payload: Record<string, unknown>): HostDecision {
   return {
     action: String(payload.action ?? "NEXT_STAGE") as HostDecision["action"],
@@ -174,6 +226,10 @@ export function Workspace() {
   const [mobileTab, setMobileTab] = useState<'progress' | 'context' | 'monitor'>('progress');
   const sessionStatusRef = useRef<string | null>(null);
   const rolesRef = useRef<AgentRole[]>([]);
+  const activeParallelStagesRef = useRef(new Set<string>());
+  const messagesContainerRef = useRef<HTMLDivElement | null>(null);
+  const shouldAutoScrollRef = useRef(true);
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
 
   // 保持 ref 与状态同步
   useEffect(() => {
@@ -226,25 +282,130 @@ export function Workspace() {
         setEvents((current) =>
           current.some((item) => item.id === event.id) ? current : [...current, event].sort((a, b) => a.sequence - b.sequence),
         );
+        if (event.type === "parallel_start" && event.stage) {
+          activeParallelStagesRef.current.add(event.stage);
+        }
+        if (event.type === "parallel_complete" && event.stage) {
+          activeParallelStagesRef.current.delete(event.stage);
+        }
+
+        if (event.type === "agent_message_delta") {
+          const messageId = payloadText(event.payload, "message_id") || event.id;
+          const delta = payloadText(event.payload, "delta");
+          const roleCode = eventRoleCode(event);
+          const roleName = rolesRef.current.find((role) => role.code === roleCode)?.name ?? roleCode ?? "Agent";
+          setMessages((current) => {
+            const existing = current.find((message) => message.id === messageId);
+            if (existing) {
+              const targetContent = `${existing.targetContent || existing.content}${delta}`;
+              return current.map((message) =>
+                message.id === messageId
+                  ? {
+                      ...message,
+                      content: revealNextChunk(message.content, targetContent),
+                      targetContent,
+                      createdAt: event.created_at,
+                      streaming: true,
+                      streamMode: "single",
+                    }
+                  : message,
+              );
+            }
+            const content = revealNextChunk("", delta);
+            return [
+              ...current,
+              {
+                id: messageId,
+                roleName,
+                stage: event.stage ?? payloadText(event.payload, "stage"),
+                content,
+                targetContent: delta,
+                createdAt: event.created_at,
+                roleCode,
+                modelUsed: typeof event.payload.model_used === "string" ? event.payload.model_used : undefined,
+                streaming: content.length < delta.length,
+                streamMode: "single",
+              },
+            ];
+          });
+        }
+
+        if (event.type === "agent_message_done") {
+          const messageId = payloadText(event.payload, "message_id") || event.id;
+          const content = payloadText(event.payload, "content");
+          const roleCode = eventRoleCode(event);
+          const roleName = rolesRef.current.find((role) => role.code === roleCode)?.name ?? roleCode ?? "Agent";
+          setMessages((current) => {
+            const existing = current.find((message) => message.id === messageId);
+            if (existing) {
+              return current.map((message) =>
+                message.id === messageId
+                  ? {
+                      ...message,
+                      targetContent: content || message.targetContent || message.content,
+                      createdAt: event.created_at,
+                      streaming: message.content.length < (content || message.targetContent || message.content).length,
+                      streamMode: "single",
+                    }
+                  : message,
+              );
+            }
+            const visibleContent = revealNextChunk("", content);
+            return [
+              ...current,
+              {
+                id: messageId,
+                roleName,
+                stage: event.stage ?? payloadText(event.payload, "stage"),
+                content: visibleContent,
+                targetContent: content,
+                createdAt: event.created_at,
+                roleCode,
+                modelUsed: typeof event.payload.model_used === "string" ? event.payload.model_used : undefined,
+                streaming: visibleContent.length < content.length,
+                streamMode: "single",
+              },
+            ];
+          });
+        }
 
         if (event.type === "agent_message") {
           const roleName = rolesRef.current.find((role) => role.code === event.role_code)?.name ?? event.role_code ?? "Agent";
-          setMessages((current) =>
-            current.some((m) => m.id === event.id)
-              ? current
-              : [
-                  ...current,
-                  {
-                    id: event.id,
-                    roleName,
-                    stage: event.stage ?? "",
-                    content: asText(event.payload),
-                    createdAt: event.created_at,
-                    roleCode: event.role_code,
-                    modelUsed: typeof event.payload.model_used === "string" ? event.payload.model_used : undefined,
-                  },
-                ],
-          );
+          const messageId = payloadText(event.payload, "message_id");
+          const fullContent = asText(event.payload);
+          const isParallelMessage = Boolean(event.stage && activeParallelStagesRef.current.has(event.stage));
+          setMessages((current) => {
+            const existingId = messageId || event.id;
+            const existing = current.find((m) => m.id === existingId || m.id === event.id);
+            if (existing) {
+              return current.map((message) =>
+                message.id === existing.id
+                  ? {
+                      ...message,
+                      targetContent: fullContent || message.targetContent,
+                      streaming: !isParallelMessage && message.content.length < (fullContent || message.targetContent).length,
+                      streamMode: isParallelMessage ? "none" : "single",
+                    }
+                  : message,
+              );
+            }
+            const content = isParallelMessage ? fullContent : revealNextChunk("", fullContent);
+            return [
+              ...current,
+              {
+                id: existingId,
+                roleName,
+                stage: event.stage ?? "",
+                content,
+                targetContent: fullContent,
+                createdAt: event.created_at,
+                roleCode: event.role_code,
+                modelUsed: typeof event.payload.model_used === "string" ? event.payload.model_used : undefined,
+                streaming: !isParallelMessage && content.length < fullContent.length,
+                streamMode: isParallelMessage ? "none" : "single",
+              },
+            ];
+          });
         }
 
         if (event.type === "session_completed") {
@@ -291,6 +452,27 @@ export function Workspace() {
 
     return () => subscription.close();
   }, [sessionId]);
+
+  useEffect(() => {
+    if (!messages.some((message) => message.streaming && message.streamMode === "single")) return;
+
+    const timer = window.setInterval(() => {
+      setMessages((current) =>
+        current.map((message) => {
+          if (!message.streaming || message.streamMode !== "single") return message;
+          const targetContent = message.targetContent || message.content;
+          const content = revealNextChunk(message.content, targetContent);
+          return {
+            ...message,
+            content,
+            streaming: content.length < targetContent.length,
+          };
+        }),
+      );
+    }, 35);
+
+    return () => window.clearInterval(timer);
+  }, [messages]);
 
   const stageItems = useMemo<StageProgressItem[]>(() => {
     const ordered = new Map<string, StageProgressItem>();
@@ -349,6 +531,47 @@ export function Workspace() {
     });
     return initialCodes;
   }, [events, roles, session?.role_ids]);
+  const roleStatuses = useMemo(() => {
+    const statuses = new Map<string, RoleStatus>();
+    activeRoleCodes.forEach((code) => statuses.set(code, "waiting"));
+
+    events.forEach((event) => {
+      const roleCode = eventRoleCode(event);
+      if (event.type === "stage_started" && event.stage && activeRoleCodes.has("host")) {
+        statuses.set("host", "speaking");
+      }
+      if (event.type === "parallel_start") {
+        const parallelRoles = Array.isArray(event.payload.roles) ? event.payload.roles.map(String) : [];
+        parallelRoles.forEach((code) => {
+          if (activeRoleCodes.has(code)) statuses.set(code, "parallel");
+        });
+      }
+      if (event.type === "agent_message_delta" && roleCode) {
+        statuses.set(roleCode, "speaking");
+      }
+      if ((event.type === "agent_message_done" || event.type === "agent_message") && roleCode) {
+        statuses.set(roleCode, "spoken");
+      }
+      if (event.type === "tool_event" && roleCode && event.payload.error) {
+        statuses.set(roleCode, "failed");
+      }
+      if (event.type === "role_removed" && roleCode) {
+        statuses.set(roleCode, "removed");
+      }
+      if (event.type === "parallel_complete") {
+        activeRoleCodes.forEach((code) => {
+          if (statuses.get(code) === "parallel") statuses.set(code, "waiting");
+        });
+      }
+      if (event.type === "session_completed" || event.type === "session_failed") {
+        activeRoleCodes.forEach((code) => {
+          if (statuses.get(code) === "speaking" || statuses.get(code) === "parallel") statuses.set(code, "waiting");
+        });
+      }
+    });
+
+    return statuses;
+  }, [activeRoleCodes, events]);
   const latestStartedStage = [...events]
     .reverse()
     .find((event) => event.type === "stage_started" && event.stage)?.stage;
@@ -410,6 +633,7 @@ export function Workspace() {
     session?.status === "completed" ? "研讨已完成" : session?.status === "failed" ? "研讨失败" : currentStage ? stageLabel(currentStage) : "等待开始";
   const showCenteredWaiting = messages.length === 0 && active && !isLoading;
   const showBottomWaiting = messages.length > 0 && active;
+  const waitingPrompt = stageWaitingPrompt(currentStage);
   const showCompletedNotice = session?.status === "completed";
   const showFailedNotice = session?.status === "failed";
   const loadContextEvent = events.find((event) => event.type === "stage_completed" && event.stage === "load_context");
@@ -422,6 +646,28 @@ export function Workspace() {
   const similarCaseToolDone = Boolean(latestKnowledgeEvent);
   const similarCaseRunning = active && !latestKnowledgeEvent;
   const similarCaseTime = latestKnowledgeEvent?.created_at ?? events[events.length - 1]?.created_at;
+  const scrollMessagesToBottom = (behavior: ScrollBehavior = "smooth") => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+    if (typeof container.scrollTo === "function") {
+      container.scrollTo({ top: container.scrollHeight, behavior });
+    } else {
+      container.scrollTop = container.scrollHeight;
+    }
+  };
+  const handleMessagesScroll = () => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    const atBottom = distanceFromBottom < 96;
+    shouldAutoScrollRef.current = atBottom;
+    setShowScrollToBottom(!atBottom);
+  };
+
+  useEffect(() => {
+    if (!shouldAutoScrollRef.current) return;
+    scrollMessagesToBottom("smooth");
+  }, [messages, waitingPrompt, showBottomWaiting, showCompletedNotice, showFailedNotice]);
 
   if (!sessionId) {
     return (
@@ -552,13 +798,20 @@ export function Workspace() {
                 .filter((role) => activeRoleCodes.has(role.code))
                 .map((role, index) => {
                   const Icon = roleIcons[index % roleIcons.length];
+                  const status = roleStatuses.get(role.code) ?? "waiting";
                   return (
                     <div key={role.id} className="min-w-[200px] max-w-[240px] flex-1 border border-slate-100 rounded-xl p-3 bg-white">
-                      <div className="flex items-center gap-2 mb-2">
-                        <div className="w-7 h-7 rounded-full flex items-center justify-center bg-blue-100 text-blue-600">
-                          <Icon className="w-4 h-4" />
+                      <div className="flex items-start justify-between gap-2 mb-2">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <div className="w-7 h-7 rounded-full flex items-center justify-center bg-blue-100 text-blue-600">
+                            <Icon className="w-4 h-4" />
+                          </div>
+                          <span className="font-medium text-slate-800 text-sm truncate">{role.name}</span>
                         </div>
-                        <span className="font-medium text-slate-800 text-sm">{role.name}</span>
+                        <span className={cn("shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium", ROLE_STATUS_STYLES[status])}>
+                          {status === "speaking" && <span className="mr-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-blue-500" />}
+                          {ROLE_STATUS_LABELS[status]}
+                        </span>
                       </div>
                       <p className="text-xs text-slate-500 leading-snug line-clamp-2">{role.description}</p>
                     </div>
@@ -567,7 +820,12 @@ export function Workspace() {
             </div>
           </div>
 
-          <div className="flex-1 bg-white rounded-2xl shadow-sm border border-slate-100 overflow-y-auto p-6 space-y-6">
+          <div
+            ref={messagesContainerRef}
+            onScroll={handleMessagesScroll}
+            aria-label="Agent 发言列表"
+            className="relative flex-1 bg-white rounded-2xl shadow-sm border border-slate-100 overflow-y-auto p-6 space-y-6"
+          >
             {messages.length === 0 && (
               <div className="h-full flex flex-col items-center justify-center gap-2 text-sm text-slate-400">
                 {isLoading || showCenteredWaiting ? <LoaderCircle className="w-5 h-5 animate-spin text-blue-500" /> : null}
@@ -575,7 +833,7 @@ export function Workspace() {
                   {isLoading
                     ? "正在加载会议..."
                     : showCenteredWaiting
-                      ? "正在等待 Agent 发言..."
+                      ? waitingPrompt
                       : showCompletedNotice
                         ? "研讨已完成，可查看会议结果"
                         : showFailedNotice
@@ -604,15 +862,32 @@ export function Workspace() {
                       {formatMessageTime(message.createdAt)}
                     </span>
                   </div>
-                  <div className="text-sm text-slate-700 leading-relaxed max-w-[90%]">{message.content}</div>
+                  <div className="text-sm text-slate-700 leading-relaxed max-w-[90%]">
+                    {message.content}
+                    {message.streaming && <span className="ml-1 inline-block h-4 w-1 animate-pulse rounded bg-blue-500 align-[-2px]" />}
+                  </div>
                 </div>
               </div>
             ))}
             {showBottomWaiting && (
               <div className="flex items-center justify-center gap-2 rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3 text-sm text-blue-600">
                 <LoaderCircle className="w-4 h-4 animate-spin" />
-                等待下一位 Agent 发言...
+                {waitingPrompt}
               </div>
+            )}
+            {showScrollToBottom && (
+              <button
+                type="button"
+                aria-label="滚动到底部"
+                onClick={() => {
+                  shouldAutoScrollRef.current = true;
+                  setShowScrollToBottom(false);
+                  scrollMessagesToBottom("smooth");
+                }}
+                className="sticky bottom-3 ml-auto flex h-9 w-9 items-center justify-center rounded-full border border-blue-100 bg-white text-blue-600 shadow-lg hover:bg-blue-50"
+              >
+                <ChevronDown className="h-4 w-4" />
+              </button>
             )}
             {messages.length > 0 && showCompletedNotice && (
               <div className="rounded-xl border border-emerald-100 bg-emerald-50/70 px-4 py-3 text-sm text-emerald-700">

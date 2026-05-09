@@ -8,6 +8,8 @@ export type SessionEventType =
   | "session_started"
   | "stage_started"
   | "agent_message"
+  | "agent_message_delta"
+  | "agent_message_done"
   | "conflict_detected"
   | "tool_event"
   | "stage_completed"

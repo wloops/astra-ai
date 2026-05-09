@@ -84,9 +84,36 @@ def test_parallel_review_and_skip_stage_events(monkeypatch) -> None:
 
     assert EventType.PARALLEL_START in event_types
     assert EventType.PARALLEL_COMPLETE in event_types
+    assert EventType.AGENT_MESSAGE_DELTA in event_types
+    assert EventType.AGENT_MESSAGE_DONE in event_types
     assert EventType.STAGE_SKIPPED in event_types or debate_completed
     assert result is not None
     assert debate_completed or any(item["stage"] == "debate" for item in result.skipped_stages)
+
+
+def test_parallel_review_does_not_emit_streaming_delta(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "llm_base_url", None)
+    monkeypatch.setattr(settings, "llm_api_key", None)
+
+    session_id = _create_session("parallel should not stream")
+    _wait_done(session_id)
+
+    with next(get_session()) as db:
+        parallel_deltas = db.exec(
+            select(SessionEvent)
+            .where(SessionEvent.session_id == session_id)
+            .where(SessionEvent.type == EventType.AGENT_MESSAGE_DELTA)
+            .where(SessionEvent.stage == "independent_review")
+        ).all()
+        parallel_messages = db.exec(
+            select(SessionEvent)
+            .where(SessionEvent.session_id == session_id)
+            .where(SessionEvent.type == EventType.AGENT_MESSAGE)
+            .where(SessionEvent.stage == "independent_review")
+        ).all()
+
+    assert parallel_messages
+    assert parallel_deltas == []
 
 
 def test_host_only_session_pulls_default_roles_before_review(monkeypatch) -> None:

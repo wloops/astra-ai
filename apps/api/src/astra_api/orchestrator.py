@@ -18,6 +18,7 @@ from astra_api.models import (
     SessionEvent,
     SessionResult,
     SessionStatus,
+    new_id,
     utc_now,
 )
 
@@ -97,6 +98,59 @@ def update_session(db: Session, session_id: str, **values: Any) -> DiscussionSes
 
 async def _stage_pause() -> None:
     await asyncio.sleep(0.1)
+
+
+def _stream_chunks(content: str, chunk_size: int = 48) -> list[str]:
+    """Split completed single-Agent output into readable SSE chunks for UI streaming."""
+
+    if not content:
+        return []
+    return [content[index:index + chunk_size] for index in range(0, len(content), chunk_size)]
+
+
+def _record_streamed_agent_message(
+    db: Session,
+    *,
+    session_id: str,
+    stage: str,
+    role_code: str,
+    payload: dict[str, Any],
+) -> None:
+    """Emit delta/done events before the legacy full message so old clients stay compatible."""
+
+    content = str(payload.get("summary") or payload.get("message") or payload.get("final_conclusion") or "")
+    message_id = new_id("msg")
+    payload["message_id"] = message_id
+    model_used = payload.get("model_used")
+    for chunk in _stream_chunks(content):
+        record_event(
+            db,
+            session_id=session_id,
+            event_type=EventType.AGENT_MESSAGE_DELTA,
+            stage=stage,
+            role_code=role_code,
+            payload={
+                "message_id": message_id,
+                "delta": chunk,
+                "role_code": role_code,
+                "stage": stage,
+                "model_used": model_used,
+            },
+        )
+    record_event(
+        db,
+        session_id=session_id,
+        event_type=EventType.AGENT_MESSAGE_DONE,
+        stage=stage,
+        role_code=role_code,
+        payload={
+            "message_id": message_id,
+            "content": content,
+            "role_code": role_code,
+            "stage": stage,
+            "model_used": model_used,
+        },
+    )
 
 
 def _suggested_stages(scenario: ScenarioTemplate) -> list[str]:
@@ -490,13 +544,21 @@ async def execute_stage(state: SessionState, stage: str) -> bool:
         "model_used": output.get("model_used"),
     }
     with Session(engine, expire_on_commit=False) as db:
+        if event_type == EventType.AGENT_MESSAGE:
+            _record_streamed_agent_message(
+                db,
+                session_id=state.session_id,
+                stage=stage,
+                role_code="host",
+                payload=payload,
+            )
         record_event(
             db,
             session_id=state.session_id,
             event_type=event_type,
             stage=stage,
             role_code="host",
-            payload=payload,
+            payload={**payload, "message_id": payload.get("message_id")} if payload.get("message_id") else payload,
         )
         record_event(
             db,

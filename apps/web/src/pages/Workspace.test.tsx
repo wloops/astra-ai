@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import { Workspace } from "./Workspace";
@@ -87,6 +87,76 @@ vi.mock("../api/events", () => ({
         payload: { phase: "initial_planning", role_code: "qa_engineer" },
         created_at: "2026-05-08T00:00:03Z",
       });
+      callbacks.onEvent({
+        id: "event_4",
+        session_id: "session_1",
+        sequence: 4,
+        type: "agent_message_delta",
+        stage: "clarify_topic",
+        role_code: "host",
+        payload: { message_id: "msg_1", delta: "Hello ", role_code: "host", stage: "clarify_topic", model_used: "test-model" },
+        created_at: "2026-05-08T00:00:04Z",
+      });
+      callbacks.onEvent({
+        id: "event_5",
+        session_id: "session_1",
+        sequence: 5,
+        type: "agent_message_delta",
+        stage: "clarify_topic",
+        role_code: "host",
+        payload: { message_id: "msg_1", delta: "streaming", role_code: "host", stage: "clarify_topic", model_used: "test-model" },
+        created_at: "2026-05-08T00:00:05Z",
+      });
+      callbacks.onEvent({
+        id: "event_6",
+        session_id: "session_1",
+        sequence: 6,
+        type: "agent_message_done",
+        stage: "clarify_topic",
+        role_code: "host",
+        payload: { message_id: "msg_1", content: "Hello streaming", role_code: "host", stage: "clarify_topic", model_used: "test-model" },
+        created_at: "2026-05-08T00:00:06Z",
+      });
+      callbacks.onEvent({
+        id: "event_7",
+        session_id: "session_1",
+        sequence: 7,
+        type: "agent_message",
+        stage: "clarify_topic",
+        role_code: "host",
+        payload: { message_id: "msg_1", summary: "Hello streaming", model_used: "test-model" },
+        created_at: "2026-05-08T00:00:07Z",
+      });
+      callbacks.onEvent({
+        id: "event_8",
+        session_id: "session_1",
+        sequence: 8,
+        type: "parallel_start",
+        stage: "independent_review",
+        role_code: null,
+        payload: { roles: ["product_manager", "qa_engineer"] },
+        created_at: "2026-05-08T00:00:08Z",
+      });
+      callbacks.onEvent({
+        id: "event_9",
+        session_id: "session_1",
+        sequence: 9,
+        type: "agent_message",
+        stage: "independent_review",
+        role_code: "product_manager",
+        payload: { summary: "Parallel complete", model_used: "test-model" },
+        created_at: "2026-05-08T00:00:09Z",
+      });
+      callbacks.onEvent({
+        id: "event_10",
+        session_id: "session_1",
+        sequence: 10,
+        type: "stage_started",
+        stage: "judge_and_summarize",
+        role_code: "host",
+        payload: {},
+        created_at: "2026-05-08T00:00:10Z",
+      });
     });
     return { close: vi.fn() };
   }),
@@ -106,5 +176,34 @@ describe("Workspace agentic orchestration events", () => {
     expect(screen.queryByText("主持决策")).not.toBeInTheDocument();
     expect(screen.getAllByText("risk_review").length).toBeGreaterThan(0);
     await waitFor(() => expect(screen.getByText("QA Engineer")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Hello st")).toBeInTheDocument());
+    expect(screen.queryByText("Hello streaming")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("Hello streaming")).toBeInTheDocument());
+    expect(screen.getAllByText("已发言").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("并行处理中").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Hello streaming")).toHaveLength(1);
+    expect(screen.getByText("Parallel complete")).toBeInTheDocument();
+    expect(screen.getByText("主持人正在裁决总结...")).toBeInTheDocument();
+  });
+
+  it("pauses auto-scroll when the user scrolls away from the bottom", async () => {
+    render(
+      <MemoryRouter initialEntries={["/workspace?sessionId=session_1"]}>
+        <Routes>
+          <Route path="/workspace" element={<Workspace />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const messageList = await screen.findByLabelText("Agent 发言列表");
+    Object.defineProperty(messageList, "scrollHeight", { configurable: true, value: 1000 });
+    Object.defineProperty(messageList, "clientHeight", { configurable: true, value: 300 });
+    Object.defineProperty(messageList, "scrollTop", { configurable: true, writable: true, value: 200 });
+
+    fireEvent.scroll(messageList);
+    expect(screen.getByLabelText("滚动到底部")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText("滚动到底部"));
+    await waitFor(() => expect(screen.queryByLabelText("滚动到底部")).not.toBeInTheDocument());
   });
 });
