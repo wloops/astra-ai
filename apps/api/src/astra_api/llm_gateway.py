@@ -145,7 +145,7 @@ class LLMGateway:
         """Let the Host Agent choose the initial team before the runtime loop."""
 
         output = await self.complete_structured(
-            role=None,
+            role="host",
             stage="initial_role_planning",
             topic=topic,
             project=project,
@@ -165,7 +165,7 @@ class LLMGateway:
         """Ask the Host Agent for a structured orchestration decision."""
 
         output = await self.complete_structured(
-            role=None,
+            role="host",
             stage="host_decision",
             topic=topic,
             project=project,
@@ -177,7 +177,7 @@ class LLMGateway:
     async def complete_structured(
         self,
         *,
-        role: AgentRole | None,
+        role: AgentRole | str | None,
         stage: str,
         topic: str,
         project: Project,
@@ -206,7 +206,7 @@ class LLMGateway:
     async def _complete_remote(
         self,
         *,
-        role: AgentRole | None,
+        role: AgentRole | str | None,
         stage: str,
         topic: str,
         project: Project,
@@ -220,10 +220,8 @@ class LLMGateway:
         model = model or settings.llm_model
         base_url = base_url or settings.llm_base_url
         api_key = api_key or settings.llm_api_key
-        role_name = role.name if role else "AI 主持人"
-        role_code = role.code if role else "host"
-        if stage == "host_decision":
-            return self._local_host_decision(context)
+        role_name = self._role_name(role)
+        role_code = self._role_code(role)
         prompt = (
             f"角色：{role_name}\n"
             f"阶段：{stage}\n"
@@ -312,14 +310,14 @@ class LLMGateway:
     def _complete_local(
         self,
         *,
-        role: AgentRole | None,
+        role: AgentRole | str | None,
         stage: str,
         topic: str,
         project: Project,
         context: dict[str, Any],
     ) -> dict[str, Any]:
-        role_code = role.code if role else "host"
-        role_name = role.name if role else "AI 主持人"
+        role_code = self._role_code(role)
+        role_name = self._role_name(role)
         if stage == "initial_role_planning":
             return self._local_initial_role_plan(context)
         if stage == "clarify_topic":
@@ -405,6 +403,24 @@ class LLMGateway:
             "open_questions": [],
             "actions": [],
         }
+
+    def _role_code(self, role: AgentRole | str | None) -> str:
+        """Normalize role identity so Host Agent routing also works before a DB role is loaded."""
+
+        if isinstance(role, str):
+            return role
+        if role is None:
+            return "host"
+        return role.code
+
+    def _role_name(self, role: AgentRole | str | None) -> str:
+        """Use a stable Host display name for lightweight string roles."""
+
+        if isinstance(role, AgentRole):
+            return role.name
+        if role == "host" or role is None:
+            return "AI 主持人"
+        return role
 
     def _parse_json_content(self, content: str) -> dict[str, Any]:
         text = content.strip()
@@ -631,3 +647,4 @@ class LLMGateway:
         except Exception as exc:
             logger.warning("embedding_call status=fallback error=%s", exc)
             return None
+

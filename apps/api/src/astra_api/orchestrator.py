@@ -263,6 +263,12 @@ def _initial_role_context(state: SessionState, available_roles: list[AgentRole])
     }
 
 
+def _host_role(state: SessionState) -> AgentRole | None:
+    """Resolve the persisted Host role so role-based model routing can match host stages."""
+
+    return next((role for role in state.roles if role.code == "host"), None)
+
+
 async def plan_initial_roles(state: SessionState) -> None:
     with Session(engine, expire_on_commit=False) as db:
         available_roles = db.exec(select(AgentRole).order_by(AgentRole.created_at)).all()
@@ -467,7 +473,7 @@ async def execute_stage(state: SessionState, stage: str) -> bool:
 
     context = _stage_context(state, stage)
     output = await gateway.complete_structured(
-        role=None,
+        role=_host_role(state),
         stage=stage,
         topic=state.topic,
         project=state.project,

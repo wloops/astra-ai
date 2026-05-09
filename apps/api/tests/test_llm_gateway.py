@@ -132,6 +132,35 @@ async def test_gateway_uses_model_profile_override(monkeypatch: pytest.MonkeyPat
 
 
 @pytest.mark.asyncio
+async def test_host_role_routing_applies_to_host_decisions(monkeypatch: pytest.MonkeyPatch) -> None:
+    FakeAsyncClient.requests = []
+    FakeAsyncClient.response_content = {
+        "action": "CONCLUDE",
+        "reason": "已完成研讨",
+        "roles": [],
+    }
+    monkeypatch.setattr("astra_api.llm_gateway.httpx.AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(
+        settings,
+        "llm_model_profiles",
+        '{"default":{"model":"mini","base_url":"https://default.test/v1","api_key":"default-key"},"strong":{"model":"strong-model","base_url":"https://strong.test/v1","api_key":"strong-key"}}',
+    )
+    monkeypatch.setattr(settings, "llm_stage_routing", "{}")
+    monkeypatch.setattr(settings, "llm_role_routing", '{"host":"strong"}')
+
+    decision = await LLMGateway().host_decide(
+        topic="test",
+        project=Project(name="test"),
+        context={"suggested_stages": [], "completed_stages": []},
+    )
+
+    request = FakeAsyncClient.requests[0]
+    assert request["url"] == "https://strong.test/v1/chat/completions"
+    assert request["json"]["model"] == "strong-model"
+    assert decision["model_used"] == "strong-model"
+
+
+@pytest.mark.asyncio
 async def test_complete_remote_without_profile_args_uses_global_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     FakeAsyncClient.requests = []
     FakeAsyncClient.response_content = {"summary": "ok"}
