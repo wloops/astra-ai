@@ -600,7 +600,7 @@ class LLMGateway:
 
     def _embeddings_url(self, base_url: str | None) -> str:
         if not base_url:
-            raise ValueError("LLM base URL is required")
+            raise ValueError("Embedding base URL is required")
         url = base_url.rstrip("/")
         if url.endswith("/embeddings"):
             return url
@@ -611,13 +611,17 @@ class LLMGateway:
     async def generate_embedding(self, text: str) -> list[float] | None:
         """Generate an embedding, returning None when semantic search must degrade."""
 
-        if not settings.llm_base_url or not settings.llm_api_key or not text.strip():
+        # 使用独立的 embedding 配置，未配置时 fallback 到对话模型配置
+        base_url = settings.embedding_base_url or settings.llm_base_url
+        api_key = settings.embedding_api_key or settings.llm_api_key
+
+        if not base_url or not api_key or not text.strip():
             return None
-        payload = {"model": settings.llm_embedding_model, "input": text}
-        headers = {"Authorization": f"Bearer {settings.llm_api_key}"}
+        payload = {"model": settings.embedding_model, "input": text}
+        headers = {"Authorization": f"Bearer {api_key}"}
         try:
             async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
-                response = await client.post(self._embeddings_url(settings.llm_base_url), json=payload, headers=headers)
+                response = await client.post(self._embeddings_url(base_url), json=payload, headers=headers)
                 response.raise_for_status()
                 data = response.json()
             vector = data["data"][0]["embedding"]
