@@ -7,11 +7,12 @@ from fastapi.testclient import TestClient
 from sqlmodel import select
 
 from astra_api.config import settings
-from astra_api.db import get_session
+from astra_api.db import get_session, init_db
 from astra_api.main import app
 from astra_api.knowledge import create_entry
 from astra_api.models import AgentRole, DiscussionSession, EventType, HumanReviewRequest, HumanReviewStatus, KnowledgeEntry, Project, ScenarioTemplate, SessionEvent, SessionResult, SessionStatus, utc_now
 from astra_api.orchestrator import gateway, run_session_workflow
+from astra_api.seed import seed_defaults
 
 
 client = TestClient(app)
@@ -117,6 +118,37 @@ def test_parallel_review_and_skip_stage_events(monkeypatch) -> None:
     assert EventType.STAGE_SKIPPED in event_types or debate_completed
     assert result is not None
     assert debate_completed or any(item["stage"] == "debate" for item in result.skipped_stages)
+
+
+def test_debate_stage_persists_structured_events_and_legacy_message(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "llm_base_url", None)
+    monkeypatch.setattr(settings, "llm_api_key", None)
+
+    init_db()
+    with next(get_session()) as db:
+        seed_defaults(db)
+    session_id = _create_db_session("structured debate event test")
+    asyncio.run(run_session_workflow(session_id))
+
+    with next(get_session()) as db:
+        events = db.exec(
+            select(SessionEvent)
+            .where(SessionEvent.session_id == session_id)
+            .order_by(SessionEvent.sequence)
+        ).all()
+
+    debate_types = [event.type for event in events if event.stage == "debate"]
+    assert EventType.DEBATE_STARTED in debate_types
+    assert EventType.DEBATE_ROUND in debate_types
+    assert EventType.DEBATE_MODERATED in debate_types
+    assert EventType.DEBATE_COMPLETED in debate_types
+    assert EventType.AGENT_MESSAGE in debate_types
+    assert EventType.STAGE_COMPLETED in debate_types
+
+    round_event = next(event for event in events if event.type == EventType.DEBATE_ROUND)
+    assert round_event.payload["round_index"] == 1
+    assert round_event.payload["speaker_role_code"]
+    assert round_event.payload["claim"]
 
 
 def test_parallel_review_does_not_emit_streaming_delta(monkeypatch) -> None:

@@ -83,6 +83,16 @@ vi.mock("../api/events", () => ({
         created_at: "2026-05-08T00:00:02Z",
       });
       callbacks.onEvent({
+        id: "event_2a",
+        session_id: "session_1",
+        sequence: 2.1,
+        type: "stage_skipped",
+        stage: "risk_review",
+        role_code: null,
+        payload: { reason: "No additional risk review needed" },
+        created_at: "2026-05-08T00:00:02Z",
+      });
+      callbacks.onEvent({
         id: "event_3",
         session_id: "session_1",
         sequence: 3,
@@ -163,6 +173,55 @@ vi.mock("../api/events", () => ({
         created_at: "2026-05-08T00:00:10Z",
       });
       callbacks.onEvent({
+        id: "event_10a",
+        session_id: "session_1",
+        sequence: 10.1,
+        type: "debate_started",
+        stage: "debate",
+        role_code: "host",
+        payload: { participants: ["product_manager", "qa_engineer"], conflict_focus: ["scope vs risk"], planned_rounds: 1 },
+        created_at: "2026-05-08T00:00:10Z",
+      });
+      callbacks.onEvent({
+        id: "event_10b",
+        session_id: "session_1",
+        sequence: 10.2,
+        type: "debate_round",
+        stage: "debate",
+        role_code: "product_manager",
+        payload: {
+          round_index: 1,
+          speaker_role_code: "product_manager",
+          responds_to_role_code: "qa_engineer",
+          stance: "support",
+          claim: "Start with limited rollout",
+          evidence: "manual process is slow",
+          risk: "scope creep",
+          model_used: "test-model",
+        },
+        created_at: "2026-05-08T00:00:10Z",
+      });
+      callbacks.onEvent({
+        id: "event_10c",
+        session_id: "session_1",
+        sequence: 10.3,
+        type: "debate_moderated",
+        stage: "debate",
+        role_code: "host",
+        payload: { judgement: "Converge on a guarded MVP", consensus: ["bounded scope"], unresolved_conflicts: ["rollback"], next_action: "conclude" },
+        created_at: "2026-05-08T00:00:10Z",
+      });
+      callbacks.onEvent({
+        id: "event_10d",
+        session_id: "session_1",
+        sequence: 10.4,
+        type: "debate_completed",
+        stage: "debate",
+        role_code: "host",
+        payload: { summary: "Debate supports a guarded MVP", key_divergences: ["rollback"], converged_conclusions: ["bounded scope"] },
+        created_at: "2026-05-08T00:00:10Z",
+      });
+      callbacks.onEvent({
         id: "event_11",
         session_id: "session_1",
         sequence: 11,
@@ -200,16 +259,19 @@ describe("Workspace agentic orchestration events", () => {
     );
 
     expect((await screen.findAllByText("需要补充风险评审")).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("已跳过：No additional risk review needed").length).toBeGreaterThan(0);
     expect(screen.queryByText("主持决策")).not.toBeInTheDocument();
     expect(screen.getAllByText("risk_review").length).toBeGreaterThan(0);
     await waitFor(() => expect(screen.getByText("QA Engineer")).toBeInTheDocument());
-    await waitFor(() => expect(screen.getByText("Hello st")).toBeInTheDocument());
-    expect(screen.queryByText("Hello streaming")).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByText("Hello streaming")).toBeInTheDocument());
     expect(screen.getAllByText("已发言").length).toBeGreaterThan(0);
     expect(screen.getAllByText("并行处理中").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Hello streaming")).toHaveLength(1);
     expect(screen.getByText("Parallel complete")).toBeInTheDocument();
+    expect(screen.getByText("交叉辩论过程")).toBeInTheDocument();
+    expect(screen.getByText("Start with limited rollout")).toBeInTheDocument();
+    expect(screen.getByText("Converge on a guarded MVP")).toBeInTheDocument();
+    expect(screen.getByText("Debate supports a guarded MVP")).toBeInTheDocument();
     expect(screen.getByText("等待人工确认后继续研讨...")).toBeInTheDocument();
   });
 

@@ -704,6 +704,89 @@ def skip_stage(state: SessionState, stage: str, reason: str) -> bool:
     return False
 
 
+def _debate_participant_codes(state: SessionState) -> list[str]:
+    codes = [str(item.get("role_code")) for item in state.role_outputs if item.get("role_code")]
+    if not codes:
+        codes = [role.code for role in state.roles if role.code != "host" and role.can_debate]
+    return list(dict.fromkeys(codes))
+
+
+def _debate_focus(state: SessionState) -> list[str]:
+    focus = [str(item.get("title") or item.get("summary")) for item in state.conflicts if item.get("title") or item.get("summary")]
+    return focus or [state.topic]
+
+
+def _record_debate_events(db: Session, *, state: SessionState, output: dict[str, Any]) -> None:
+    """Persist replayable debate events while keeping the legacy stage events intact."""
+
+    rounds = output.get("debate_rounds") if isinstance(output.get("debate_rounds"), list) else []
+    moderation = output.get("moderation") if isinstance(output.get("moderation"), dict) else {}
+    record_event(
+        db,
+        session_id=state.session_id,
+        event_type=EventType.DEBATE_STARTED,
+        stage="debate",
+        role_code="host",
+        payload={
+            "participants": _debate_participant_codes(state),
+            "conflict_focus": _debate_focus(state),
+            "planned_rounds": max(1, len(rounds)),
+            "model_used": output.get("model_used"),
+        },
+    )
+    for index, item in enumerate(rounds, start=1):
+        if not isinstance(item, dict):
+            continue
+        speaker = str(item.get("speaker_role_code") or "host")
+        record_event(
+            db,
+            session_id=state.session_id,
+            event_type=EventType.DEBATE_ROUND,
+            stage="debate",
+            role_code=speaker,
+            payload={
+                "round_index": item.get("round_index") if isinstance(item.get("round_index"), int) else index,
+                "speaker_role_code": speaker,
+                "responds_to_role_code": item.get("responds_to_role_code") if isinstance(item.get("responds_to_role_code"), str) else None,
+                "stance": str(item.get("stance") or "response"),
+                "claim": str(item.get("claim") or item.get("summary") or ""),
+                "evidence": str(item.get("evidence") or ""),
+                "risk": str(item.get("risk") or ""),
+                "concession": str(item.get("concession") or ""),
+                "model_used": output.get("model_used"),
+            },
+        )
+    record_event(
+        db,
+        session_id=state.session_id,
+        event_type=EventType.DEBATE_MODERATED,
+        stage="debate",
+        role_code="host",
+        payload={
+            "round_index": moderation.get("round_index") if isinstance(moderation.get("round_index"), int) else 1,
+            "judgement": str(moderation.get("judgement") or ""),
+            "consensus": moderation.get("consensus") if isinstance(moderation.get("consensus"), list) else [],
+            "unresolved_conflicts": moderation.get("unresolved_conflicts") if isinstance(moderation.get("unresolved_conflicts"), list) else [],
+            "next_action": str(moderation.get("next_action") or "conclude"),
+            "model_used": output.get("model_used"),
+        },
+    )
+    record_event(
+        db,
+        session_id=state.session_id,
+        event_type=EventType.DEBATE_COMPLETED,
+        stage="debate",
+        role_code="host",
+        payload={
+            "summary": str(output.get("debate_summary") or output.get("summary") or ""),
+            "key_divergences": output.get("key_divergences") if isinstance(output.get("key_divergences"), list) else [],
+            "converged_conclusions": output.get("converged_conclusions") if isinstance(output.get("converged_conclusions"), list) else [],
+            "judgement_input": str(output.get("summary") or ""),
+            "model_used": output.get("model_used"),
+        },
+    )
+
+
 async def execute_stage(state: SessionState, stage: str) -> bool:
     if not stage:
         return False
@@ -740,6 +823,8 @@ async def execute_stage(state: SessionState, stage: str) -> bool:
         "model_used": output.get("model_used"),
     }
     with Session(engine, expire_on_commit=False) as db:
+        if stage == "debate":
+            _record_debate_events(db, state=state, output=output)
         if event_type == EventType.AGENT_MESSAGE:
             _record_streamed_agent_message(
                 db,

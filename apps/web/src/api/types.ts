@@ -11,6 +11,10 @@ export type SessionEventType =
   | "agent_message_delta"
   | "agent_message_done"
   | "conflict_detected"
+  | "debate_started"
+  | "debate_round"
+  | "debate_moderated"
+  | "debate_completed"
   | "tool_event"
   | "stage_completed"
   | "host_decision"
@@ -181,6 +185,7 @@ export interface SessionResult {
   actual_flow?: string[];
   skipped_stages?: SkippedStage[];
   added_stages?: AddedStage[];
+  debate_trace?: Record<string, unknown>[];
   markdown_minutes: string;
   created_at: string;
 }

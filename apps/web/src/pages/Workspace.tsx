@@ -53,6 +53,39 @@ interface StageDecisionSummary {
   reason: string;
 }
 
+interface DebateRoundView {
+  id: string;
+  roundIndex: number;
+  speakerRoleCode: string;
+  speakerName: string;
+  respondsToRoleCode: string | null;
+  stance: string;
+  claim: string;
+  evidence: string;
+  risk: string;
+  concession: string;
+  modelUsed?: string;
+}
+
+interface DebateThreadView {
+  id: string;
+  participants: string[];
+  conflictFocus: string[];
+  plannedRounds: number;
+  rounds: DebateRoundView[];
+  moderation?: {
+    judgement: string;
+    consensus: string[];
+    unresolvedConflicts: string[];
+    nextAction: string;
+  };
+  completed?: {
+    summary: string;
+    keyDivergences: string[];
+    convergedConclusions: string[];
+  };
+}
+
 const roleIcons = [Bot, User, Code2, ShieldCheck];
 
 type RoleStatus = "waiting" | "speaking" | "spoken" | "parallel" | "failed" | "removed";
@@ -153,6 +186,84 @@ function payloadText(payload: Record<string, unknown>, key: string): string {
 
 function eventRoleCode(event: SessionEvent): string | null {
   return event.role_code ?? (typeof event.payload.role_code === "string" ? event.payload.role_code : null);
+}
+
+function payloadStringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(String).filter(Boolean) : [];
+}
+
+function roleDisplayName(code: string | null | undefined, roles: AgentRole[]): string {
+  if (!code) return "Agent";
+  return roles.find((role) => role.code === code)?.name ?? code;
+}
+
+function buildDebateThreads(events: SessionEvent[], roles: AgentRole[]): DebateThreadView[] {
+  const threads: DebateThreadView[] = [];
+  let current: DebateThreadView | null = null;
+
+  events
+    .filter((event) => event.stage === "debate")
+    .forEach((event) => {
+      if (event.type === "debate_started") {
+        current = {
+          id: event.id,
+          participants: payloadStringList(event.payload.participants),
+          conflictFocus: payloadStringList(event.payload.conflict_focus),
+          plannedRounds: typeof event.payload.planned_rounds === "number" ? event.payload.planned_rounds : 1,
+          rounds: [],
+        };
+        threads.push(current);
+        return;
+      }
+
+      if (!current && ["debate_round", "debate_moderated", "debate_completed"].includes(event.type)) {
+        current = {
+          id: `debate-${event.id}`,
+          participants: [],
+          conflictFocus: [],
+          plannedRounds: 1,
+          rounds: [],
+        };
+        threads.push(current);
+      }
+      if (!current) return;
+
+      if (event.type === "debate_round") {
+        const speakerRoleCode = payloadText(event.payload, "speaker_role_code") || event.role_code || "host";
+        current.rounds.push({
+          id: event.id,
+          roundIndex: typeof event.payload.round_index === "number" ? event.payload.round_index : current.rounds.length + 1,
+          speakerRoleCode,
+          speakerName: roleDisplayName(speakerRoleCode, roles),
+          respondsToRoleCode: payloadText(event.payload, "responds_to_role_code") || null,
+          stance: payloadText(event.payload, "stance"),
+          claim: payloadText(event.payload, "claim"),
+          evidence: payloadText(event.payload, "evidence"),
+          risk: payloadText(event.payload, "risk"),
+          concession: payloadText(event.payload, "concession"),
+          modelUsed: payloadText(event.payload, "model_used") || undefined,
+        });
+      }
+
+      if (event.type === "debate_moderated") {
+        current.moderation = {
+          judgement: payloadText(event.payload, "judgement"),
+          consensus: payloadStringList(event.payload.consensus),
+          unresolvedConflicts: payloadStringList(event.payload.unresolved_conflicts),
+          nextAction: payloadText(event.payload, "next_action"),
+        };
+      }
+
+      if (event.type === "debate_completed") {
+        current.completed = {
+          summary: payloadText(event.payload, "summary"),
+          keyDivergences: payloadStringList(event.payload.key_divergences),
+          convergedConclusions: payloadStringList(event.payload.converged_conclusions),
+        };
+      }
+    });
+
+  return threads;
 }
 
 function revealNextChunk(content: string, target: string): string {
@@ -617,9 +728,13 @@ export function Workspace() {
 
   const stageItems = useMemo<StageProgressItem[]>(() => {
     const ordered = new Map<string, StageProgressItem>();
+    const realStages = new Set<string>();
     (scenario?.stages ?? []).forEach((stage) => ordered.set(stage, { stage, added: false }));
     events.forEach((event) => {
       const stage = event.stage ?? undefined;
+      if (stage && event.type !== "host_decision") {
+        realStages.add(stage);
+      }
       if ((event.type === "stage_started" || event.type === "stage_completed") && stage && !ordered.has(stage)) {
         ordered.set(stage, { stage, added: false });
       }
@@ -628,6 +743,16 @@ export function Workspace() {
         const decisionStage = decision.stage_name ?? decision.stage ?? undefined;
         if (decisionStage) {
           const existing = ordered.get(decisionStage) ?? { stage: decisionStage, added: decision.action === "ADD_STAGE" };
+          if (decision.action === "NEXT_STAGE") {
+            const orderedStages = Array.from(ordered.keys());
+            const targetIndex = orderedStages.indexOf(decisionStage);
+            orderedStages.slice(0, targetIndex).forEach((candidate) => {
+              const skippedCandidate = ordered.get(candidate);
+              if (skippedCandidate && !realStages.has(candidate) && !skippedCandidate.skippedReason) {
+                ordered.set(candidate, { ...skippedCandidate, skippedReason: decision.reason || "该阶段已由主持人决策跳过" });
+              }
+            });
+          }
           ordered.set(decisionStage, {
             ...existing,
             added: existing.added || decision.action === "ADD_STAGE",
@@ -713,6 +838,14 @@ export function Workspace() {
 
     return statuses;
   }, [activeRoleCodes, events]);
+  const debateThreads = useMemo(() => buildDebateThreads(events, roles), [events, roles]);
+  const eventBackedStages = useMemo(() => {
+    const backed = new Set<string>();
+    events.forEach((event) => {
+      if (event.stage && event.type !== "host_decision") backed.add(event.stage);
+    });
+    return backed;
+  }, [events]);
   const latestStartedStage = [...events]
     .reverse()
     .find((event) => event.type === "stage_started" && event.stage)?.stage;
@@ -728,17 +861,23 @@ export function Workspace() {
 
     // 后端不会为所有阶段发 stage_completed；展示层用阶段顺序补齐已越过的阶段。
     if (currentIndex > 0) {
-      stages.slice(0, currentIndex).forEach((stage) => completed.add(stage));
+      stages.slice(0, currentIndex).forEach((stage) => {
+        if (eventBackedStages.has(stage)) completed.add(stage);
+      });
     }
     if (session?.status === "completed") {
-      stages.forEach((stage) => completed.add(stage));
+      stages.forEach((stage) => {
+        if (eventBackedStages.has(stage)) completed.add(stage);
+      });
     }
     if (session?.status === "failed" && currentStage) {
-      stages.slice(0, Math.max(currentIndex, 0)).forEach((stage) => completed.add(stage));
+      stages.slice(0, Math.max(currentIndex, 0)).forEach((stage) => {
+        if (eventBackedStages.has(stage)) completed.add(stage);
+      });
     }
 
     return completed;
-  }, [currentStage, events, session?.status, skippedStageReasons, stages]);
+  }, [currentStage, eventBackedStages, events, session?.status, skippedStageReasons, stages]);
   useEffect(() => {
     if (!active) return;
     const timer = window.setInterval(() => setNowMs(Date.now()), pendingReview ? 1_000 : 30_000);
@@ -1112,7 +1251,12 @@ export function Workspace() {
                         {stageLabel(stage)}
                         {item.added && <span className="ml-1 text-[10px] text-blue-500">新增</span>}
                       </span>
-                      <span className="text-xs text-slate-400">{completed ? "已完成" : current ? "进行中" : "等待中"}</span>
+                      <span className="text-xs text-slate-400">{skipped ? "已跳过" : completed ? "已完成" : current ? "进行中" : "等待中"}</span>
+                      {skipped && (
+                        <span className="mt-1 rounded-lg bg-slate-100 px-2 py-1 text-[11px] leading-snug text-slate-600">
+                          已跳过：{skippedStageReasons.get(stage)}
+                        </span>
+                      )}
                       {item.decisions?.slice(-2).map((decision) => (
                         <span key={decision.id} className="mt-1 rounded-lg bg-blue-50 px-2 py-1 text-[11px] leading-snug text-blue-700">
                           <span className="font-semibold">{decision.label}：</span>
@@ -1240,6 +1384,73 @@ export function Workspace() {
                   </div>
                 </div>
               </div>
+            ))}
+            {debateThreads.map((thread) => (
+              <section
+                key={thread.id}
+                aria-label="交叉辩论过程"
+                className="rounded-2xl border border-indigo-100 bg-indigo-50/40 p-4"
+              >
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold text-slate-900">交叉辩论过程</div>
+                    <div className="mt-1 text-xs text-slate-500">
+                      {thread.participants.length > 0
+                        ? `参与角色：${thread.participants.map((code) => roleDisplayName(code, roles)).join("、")}`
+                        : "从历史事件重建"}
+                    </div>
+                  </div>
+                  <span className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-indigo-700">
+                    {thread.completed ? "已完成" : `${thread.rounds.length}/${thread.plannedRounds} 轮`}
+                  </span>
+                </div>
+                {thread.conflictFocus.length > 0 && (
+                  <div className="mb-3 rounded-xl bg-white/80 px-3 py-2 text-xs text-slate-600">
+                    焦点：{thread.conflictFocus.join("；")}
+                  </div>
+                )}
+                <div className="space-y-3">
+                  {thread.rounds.map((round) => (
+                    <div key={round.id} className="rounded-xl border border-white bg-white p-3">
+                      <div className="mb-1 flex flex-wrap items-center gap-2 text-xs">
+                        <span className="font-semibold text-slate-900">{round.speakerName}</span>
+                        <span className="rounded-full bg-indigo-50 px-2 py-0.5 font-medium text-indigo-700">
+                          第 {round.roundIndex} 轮
+                        </span>
+                        {round.respondsToRoleCode && (
+                          <span className="text-slate-500">回应 {roleDisplayName(round.respondsToRoleCode, roles)}</span>
+                        )}
+                        {round.modelUsed && <span className="text-slate-400">{round.modelUsed}</span>}
+                      </div>
+                      <p className="text-sm leading-relaxed text-slate-700">{round.claim}</p>
+                      {(round.evidence || round.risk || round.concession) && (
+                        <div className="mt-2 grid gap-2 text-xs text-slate-500 md:grid-cols-3">
+                          {round.evidence && <span>证据：{round.evidence}</span>}
+                          {round.risk && <span>风险：{round.risk}</span>}
+                          {round.concession && <span>让步：{round.concession}</span>}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                {thread.moderation && (
+                  <div className="mt-3 rounded-xl border border-blue-100 bg-white p-3 text-sm text-slate-700">
+                    <div className="font-semibold text-slate-900">主持人收束</div>
+                    <p className="mt-1">{thread.moderation.judgement}</p>
+                    {(thread.moderation.consensus.length > 0 || thread.moderation.unresolvedConflicts.length > 0) && (
+                      <div className="mt-2 grid gap-2 text-xs text-slate-500 md:grid-cols-2">
+                        {thread.moderation.consensus.length > 0 && <span>共识：{thread.moderation.consensus.join("；")}</span>}
+                        {thread.moderation.unresolvedConflicts.length > 0 && <span>分歧：{thread.moderation.unresolvedConflicts.join("；")}</span>}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {thread.completed && (
+                  <div className="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+                    {thread.completed.summary}
+                  </div>
+                )}
+              </section>
             ))}
             {showBottomWaiting && (
               <div className="flex items-center justify-center gap-2 rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3 text-sm text-blue-600">
@@ -1573,7 +1784,12 @@ export function Workspace() {
                           {stageLabel(stage)}
                           {item.added && <span className="ml-1 text-[10px] text-blue-500">新增</span>}
                         </span>
-                        <span className="text-xs text-slate-400">{completed ? '已完成' : current ? '进行中' : '等待中'}</span>
+                        <span className="text-xs text-slate-400">{skipped ? '已跳过' : completed ? '已完成' : current ? '进行中' : '等待中'}</span>
+                        {skipped && (
+                          <span className="mt-1 rounded-lg bg-slate-100 px-2 py-1 text-[11px] leading-snug text-slate-600">
+                            已跳过：{skippedStageReasons.get(stage)}
+                          </span>
+                        )}
                         {item.decisions?.slice(-1).map((decision) => (
                           <span key={decision.id} className="mt-1 rounded-lg bg-blue-50 px-2 py-1 text-[11px] leading-snug text-blue-700">
                             <span className="font-semibold">{decision.label}：</span>

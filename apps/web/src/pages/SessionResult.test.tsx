@@ -2,6 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import { SessionResult } from "./SessionResult";
+import { apiClient } from "../api/client";
 
 vi.mock("../components/dashboard/Navbar", () => ({
   Navbar: () => <div data-testid="navbar" />,
@@ -70,5 +71,46 @@ describe("SessionResult human review output", () => {
     expect(screen.getByText("30元阈值按含税还是未税计算？")).toBeInTheDocument();
     expect(screen.getByText(/human_review_timeout/)).toBeInTheDocument();
     expect(screen.getByText("依赖待确认问题")).toBeInTheDocument();
+    expect(screen.queryByText("关键辩论追溯")).not.toBeInTheDocument();
+  });
+
+  it("renders debate trace when the result includes debate data", async () => {
+    vi.mocked(apiClient.getSessionResult).mockResolvedValueOnce({
+      id: "result_2",
+      session_id: "session_1",
+      final_conclusion: "Guarded MVP",
+      key_conflicts: [],
+      role_summaries: [],
+      risks: [],
+      open_questions: [],
+      actions: [],
+      actual_flow: [],
+      skipped_stages: [],
+      added_stages: [],
+      debate_trace: [
+        {
+          speaker_role_code: "product_manager",
+          stance: "support",
+          claim: "Start with limited rollout",
+          judgement: "Converge on a guarded MVP",
+          key_divergences: ["rollback"],
+          converged_conclusions: ["bounded scope"],
+        },
+      ],
+      markdown_minutes: "# Minutes",
+      created_at: "2026-05-09T00:00:00Z",
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/session-result?sessionId=session_1"]}>
+        <Routes>
+          <Route path="/session-result" element={<SessionResult />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText("关键辩论追溯")).toBeInTheDocument());
+    expect(screen.getByText(/Start with limited rollout/)).toBeInTheDocument();
+    expect(screen.getByText(/Converge on a guarded MVP/)).toBeInTheDocument();
   });
 });

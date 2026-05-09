@@ -310,10 +310,31 @@ async def test_local_fallback_debate(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "llm_base_url", None)
     monkeypatch.setattr(settings, "llm_api_key", None)
     output = await LLMGateway().complete_structured(
-        role=None, stage="debate", topic="测试", project=Project(name="测试项目"), context={},
+        role=None,
+        stage="debate",
+        topic="测试",
+        project=Project(name="测试项目"),
+        context={
+            "active_role_codes": ["host", "role_a", "role_b", "role_c"],
+            "conflicts": [
+                {
+                    "title": "是否继续推进",
+                    "supporting_view": "支持继续推进，但要先限定范围。",
+                    "cautious_view": "反对立即推进，认为要先补齐约束。",
+                    "judgement": "需要先明确推进条件，再决定是否进入下一步。",
+                }
+            ],
+        },
     )
     assert output["stance"] == "debate_summarized"
     assert len(output["summary"]) > 0
+    assert [item["speaker_role_code"] for item in output["debate_rounds"][:3]] == ["role_a", "role_b", "role_c"]
+    assert output["debate_rounds"][0]["claim"] == "支持继续推进，但要先限定范围。"
+    assert output["debate_rounds"][1]["claim"] == "反对立即推进，认为要先补齐约束。"
+    assert output["debate_rounds"][2]["claim"] == "需要先明确推进条件，再决定是否进入下一步。"
+    assert output["moderation"]["judgement"] == "需要先明确推进条件，再决定是否进入下一步。"
+    assert "Host summarizes" not in output["summary"]
+    assert output["moderation"]["next_action"] == "conclude"
 
 
 @pytest.mark.asyncio

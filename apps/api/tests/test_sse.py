@@ -48,6 +48,10 @@ async def test_sse_streams_events_and_closes_on_completed(monkeypatch: pytest.Mo
     assert len(events) > 0
     assert "host_decision" in events
     assert "parallel_start" in events
+    assert "debate_started" in events
+    assert "debate_round" in events
+    assert "debate_moderated" in events
+    assert "debate_completed" in events
     has_completed = any(e for e in events if e in ("session_completed", "session_failed"))
     assert has_completed, f"Should receive session_completed or session_failed, got: {events}"
 

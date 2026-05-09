@@ -191,6 +191,7 @@ class SessionResultRead(BaseModel):
     actual_flow: list[str] = []
     skipped_stages: list[dict[str, Any]] = []
     added_stages: list[dict[str, Any]] = []
+    debate_trace: list[dict[str, Any]] = []
     markdown_minutes: str
     created_at: datetime
 

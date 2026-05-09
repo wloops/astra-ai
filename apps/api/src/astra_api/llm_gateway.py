@@ -207,6 +207,8 @@ class LLMGateway:
             )
         else:
             output = self._complete_local(role=role, stage=stage, topic=topic, project=project, context=context)
+        if stage == "debate" and not output.get("debate_rounds"):
+            output.update(self._local_debate_trace(context))
         output["model_used"] = profile.model
         return output
 
@@ -352,6 +354,7 @@ class LLMGateway:
         if stage == "debate":
             return {
                 **DEFAULT_OUTPUT,
+                **self._local_debate_trace(context),
                 "summary": "辩论结论：业务价值成立，但上线前必须完成异常回退、审计链路和灰度回滚设计。",
                 "stance": "debate_summarized",
             }
@@ -458,10 +461,116 @@ class LLMGateway:
 
         if stage == "detect_conflict":
             output["conflicts"] = data["conflicts"] if isinstance(data.get("conflicts"), list) else []
+        if stage == "debate":
+            output.update(self._normalize_debate_trace(data))
         if stage == "judge_and_summarize":
             final_conclusion = data.get("final_conclusion")
             output["final_conclusion"] = final_conclusion if isinstance(final_conclusion, str) else output["summary"]
         return output
+
+    def _normalize_debate_trace(self, data: dict[str, Any]) -> dict[str, Any]:
+        rounds: list[dict[str, Any]] = []
+        raw_rounds = data.get("debate_rounds")
+        for index, item in enumerate(raw_rounds if isinstance(raw_rounds, list) else [], start=1):
+            if not isinstance(item, dict):
+                continue
+            speaker = item.get("speaker_role_code")
+            claim = item.get("claim")
+            if not isinstance(speaker, str) or not speaker.strip() or not isinstance(claim, str) or not claim.strip():
+                continue
+            rounds.append(
+                {
+                    "round_index": item.get("round_index") if isinstance(item.get("round_index"), int) else index,
+                    "speaker_role_code": speaker,
+                    "responds_to_role_code": item.get("responds_to_role_code") if isinstance(item.get("responds_to_role_code"), str) else None,
+                    "stance": item.get("stance") if isinstance(item.get("stance"), str) else "response",
+                    "claim": claim,
+                    "evidence": item.get("evidence") if isinstance(item.get("evidence"), str) else "",
+                    "risk": item.get("risk") if isinstance(item.get("risk"), str) else "",
+                    "concession": item.get("concession") if isinstance(item.get("concession"), str) else "",
+                }
+            )
+
+        raw_moderation = data.get("moderation")
+        moderation = raw_moderation if isinstance(raw_moderation, dict) else {}
+        return {
+            "debate_rounds": rounds,
+            "moderation": {
+                "round_index": moderation.get("round_index") if isinstance(moderation.get("round_index"), int) else 1,
+                "judgement": moderation.get("judgement") if isinstance(moderation.get("judgement"), str) else "",
+                "consensus": [str(item) for item in moderation.get("consensus", [])] if isinstance(moderation.get("consensus"), list) else [],
+                "unresolved_conflicts": [str(item) for item in moderation.get("unresolved_conflicts", [])] if isinstance(moderation.get("unresolved_conflicts"), list) else [],
+                "next_action": moderation.get("next_action") if isinstance(moderation.get("next_action"), str) else "conclude",
+            },
+            "debate_summary": data.get("debate_summary") if isinstance(data.get("debate_summary"), str) else data.get("summary", ""),
+            "key_divergences": [str(item) for item in data.get("key_divergences", [])] if isinstance(data.get("key_divergences"), list) else [],
+            "converged_conclusions": [str(item) for item in data.get("converged_conclusions", [])] if isinstance(data.get("converged_conclusions"), list) else [],
+        }
+
+    def _local_debate_trace(self, context: dict[str, Any]) -> dict[str, Any]:
+        role_outputs = [item for item in context.get("role_outputs", []) if isinstance(item, dict)]
+        conflicts = [item for item in context.get("conflicts", []) if isinstance(item, dict)]
+        conflict = conflicts[0] if conflicts else {}
+        focus = str(conflict.get("title") or "核心取舍")
+        speakers = role_outputs[:3] or self._fallback_debate_speakers(context, conflict, focus)
+        rounds: list[dict[str, Any]] = []
+        previous_role: str | None = None
+        for index, item in enumerate(speakers, start=1):
+            role_code = str(item.get("role_code") or "host")
+            risks = item.get("risks")
+            rounds.append(
+                {
+                    "round_index": index,
+                    "speaker_role_code": role_code,
+                    "responds_to_role_code": previous_role,
+                    "stance": str(item.get("stance") or "response"),
+                    "claim": str(item.get("summary") or f"{role_code} 围绕「{focus}」补充自己的判断。"),
+                    "evidence": str(item.get("evidence") or item.get("recommendation") or ""),
+                    "risk": "; ".join(str(risk) for risk in risks[:2]) if isinstance(risks, list) else "",
+                    "concession": str(item.get("concession") or ""),
+                }
+            )
+            previous_role = role_code
+
+        return {
+            "debate_rounds": rounds,
+            "moderation": {
+                "round_index": 1,
+                "judgement": str(conflict.get("judgement") or f"围绕「{focus}」的分歧已经展开，后续裁决需要在推进条件与约束边界之间做出明确取舍。"),
+                "consensus": [],
+                "unresolved_conflicts": [focus],
+                "next_action": "conclude",
+            },
+            "debate_summary": "已根据角色立场与识别出的冲突生成结构化交叉辩论追溯。",
+            "key_divergences": [focus],
+            "converged_conclusions": ["将辩论中形成的条件、约束与待确认点带入后续裁决和行动项拆解。"],
+        }
+
+    def _fallback_debate_speakers(
+        self,
+        context: dict[str, Any],
+        conflict: dict[str, Any],
+        focus: str,
+    ) -> list[dict[str, Any]]:
+        raw_codes = context.get("active_role_codes") or context.get("default_role_codes") or []
+        role_codes = [str(code) for code in raw_codes if str(code) != "host"]
+        role_codes = list(dict.fromkeys(role_codes))[:3] or ["participant_a", "participant_b", "participant_c"]
+        supporting = str(conflict.get("supporting_view") or f"支持围绕「{focus}」继续推进，但需要明确推进条件。")
+        cautious = str(conflict.get("cautious_view") or f"对「{focus}」的推进保持审慎，认为需要先补齐关键约束。")
+        judgement = str(conflict.get("judgement") or f"围绕「{focus}」需要在推进诉求与约束条件之间建立边界。")
+        claims = [supporting, cautious, judgement]
+        stances = ["提出推进理由", "提出保留意见", "归纳折中条件"]
+        return [
+            {
+                "role_code": role_code,
+                "summary": claims[index % len(claims)],
+                "stance": stances[index % len(stances)],
+                "evidence": "",
+                "risk": "",
+                "concession": "",
+            }
+            for index, role_code in enumerate(role_codes)
+        ]
 
     def _normalize_initial_role_plan(self, data: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
         selected_role_codes = data.get("selected_role_codes")

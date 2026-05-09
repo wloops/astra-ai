@@ -36,6 +36,10 @@ function questionMeta(value: string | Record<string, unknown>) {
   };
 }
 
+function listText(value: unknown): string {
+  return Array.isArray(value) ? value.map(String).filter(Boolean).join("；") : text(value);
+}
+
 export function SessionResult() {
   const [searchParams] = useSearchParams();
   const sessionId = searchParams.get("sessionId") ?? "";
@@ -116,6 +120,7 @@ export function SessionResult() {
   const skippedStages = new Map((result.skipped_stages ?? []).map((item) => [item.stage, item.reason]));
   const addedStages = new Set((result.added_stages ?? []).map((item) => item.stage));
   const hasFlowData = actualFlow.length > 0;
+  const debateTrace = result.debate_trace ?? [];
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans">
@@ -211,6 +216,32 @@ export function SessionResult() {
             <p className="text-sm text-slate-500">该研讨使用旧版流程，暂无流程对比数据。</p>
           )}
         </section>
+
+        {debateTrace.length > 0 && (
+          <section className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm mb-6">
+            <h3 className="flex items-center gap-2 text-slate-900 font-semibold mb-4">
+              <Scale className="w-5 h-5 text-indigo-600" />
+              关键辩论追溯
+            </h3>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+              {debateTrace.map((item, index) => (
+                <div key={index} className="rounded-xl border border-slate-100 bg-slate-50/60 p-4 text-sm text-slate-700">
+                  <div className="font-semibold text-slate-900">
+                    {text(item.title, text(item.summary, `辩论记录 ${index + 1}`))}
+                  </div>
+                  <div className="mt-2 space-y-1">
+                    {item.speaker_role_code && <div>角色：{text(item.speaker_role_code)}</div>}
+                    {item.stance && <div>立场：{text(item.stance)}</div>}
+                    {item.claim && <div>主张：{text(item.claim)}</div>}
+                    {item.judgement && <div>主持人收束：{text(item.judgement)}</div>}
+                    {item.key_divergences && <div>关键分歧：{listText(item.key_divergences)}</div>}
+                    {item.converged_conclusions && <div>收敛结论：{listText(item.converged_conclusions)}</div>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
           <section className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm">

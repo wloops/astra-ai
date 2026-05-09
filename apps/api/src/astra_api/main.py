@@ -3,6 +3,7 @@ import json
 import time
 from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
+from typing import Any
 from urllib.parse import urlparse
 
 import httpx
@@ -731,14 +732,53 @@ def get_discussion_result(
     session_id: str,
     session: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
-) -> SessionResult:
+) -> dict[str, Any]:
     discussion = session.get(DiscussionSession, session_id)
     if discussion is None or discussion.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Session not found")
     result = session.exec(select(SessionResult).where(SessionResult.session_id == session_id)).first()
     if result is None:
         raise HTTPException(status_code=404, detail="Session result not found")
-    return result
+    payload = SessionResultRead.model_validate(result).model_dump()
+    payload["debate_trace"] = _debate_trace_from_events(session, session_id)
+    return payload
+
+
+def _debate_trace_from_events(session: Session, session_id: str) -> list[dict[str, Any]]:
+    events = session.exec(
+        select(SessionEvent)
+        .where(SessionEvent.session_id == session_id)
+        .where(SessionEvent.stage == "debate")
+        .order_by(SessionEvent.sequence)
+    ).all()
+    trace: list[dict[str, Any]] = []
+    for event in events:
+        if event.type == EventType.DEBATE_ROUND:
+            trace.append({
+                "type": event.type,
+                "speaker_role_code": event.payload.get("speaker_role_code") or event.role_code,
+                "stance": event.payload.get("stance"),
+                "claim": event.payload.get("claim"),
+                "evidence": event.payload.get("evidence"),
+                "risk": event.payload.get("risk"),
+            })
+        elif event.type == EventType.DEBATE_MODERATED:
+            trace.append({
+                "type": event.type,
+                "title": "host_moderation",
+                "judgement": event.payload.get("judgement"),
+                "consensus": event.payload.get("consensus", []),
+                "unresolved_conflicts": event.payload.get("unresolved_conflicts", []),
+            })
+        elif event.type == EventType.DEBATE_COMPLETED:
+            trace.append({
+                "type": event.type,
+                "title": "debate_completed",
+                "summary": event.payload.get("summary"),
+                "key_divergences": event.payload.get("key_divergences", []),
+                "converged_conclusions": event.payload.get("converged_conclusions", []),
+            })
+    return trace
 
 
 @api_router.post("/sessions/{session_id}/human-reviews/{review_id}/respond", response_model=HumanReviewRead)
