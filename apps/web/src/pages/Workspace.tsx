@@ -4,6 +4,8 @@ import {
   Bot,
   Check,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Clock,
   Code2,
   Copy,
@@ -19,6 +21,7 @@ import {
   ShieldCheck,
   Square,
   Target,
+  TimerReset,
   User,
 } from "lucide-react";
 import { apiClient } from "../api/client";
@@ -397,6 +400,7 @@ export function Workspace() {
   const [reviewDrawerOpen, setReviewDrawerOpen] = useState(true);
   const [reviewAnswer, setReviewAnswer] = useState("");
   const [reviewItemAnswers, setReviewItemAnswers] = useState<Record<number, string>>({});
+  const [activeReviewItemIndex, setActiveReviewItemIndex] = useState(0);
   const [selectedReviewOption, setSelectedReviewOption] = useState("");
   const [reviewSubmitting, setReviewSubmitting] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
@@ -922,6 +926,32 @@ export function Workspace() {
       ? Math.max(0, Math.min(100, Math.round((reviewRemainingMs / reviewTotalMs) * 100)))
       : 0;
   const reviewExpired = reviewRemainingMs !== null && reviewRemainingMs <= 0;
+  const reviewQuestionCount = pendingReview ? Math.max(1, reviewQuestionItems.length) : 0;
+  const activeReviewQuestionIndex =
+    reviewQuestionCount > 0 ? Math.min(activeReviewItemIndex, reviewQuestionCount - 1) : 0;
+  const activeReviewQuestion = reviewQuestionItems[activeReviewQuestionIndex] ?? pendingReview?.question ?? "";
+  const activeReviewAnswer = reviewItemAnswers[activeReviewQuestionIndex] ?? "";
+  const activeReviewOptions = useMemo(() => {
+    if (!pendingReview) return [];
+    const seen = new Set<string>();
+    return pendingReview.options
+      .map((option) => {
+        const optionItems = splitNumberedItems(option);
+        const label = optionItems.length > 1 ? optionItems[activeReviewQuestionIndex] ?? option : option;
+        return { label, source: option };
+      })
+      .filter((option) => {
+        const key = option.label.trim();
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+  }, [activeReviewQuestionIndex, pendingReview]);
+  const answeredReviewCount = reviewQuestionItems.length > 1
+    ? reviewQuestionItems.filter((_, index) => Boolean(reviewItemAnswers[index]?.trim())).length
+    : selectedReviewOption || reviewAnswer.trim()
+      ? 1
+      : 0;
   const currentStageText =
     session?.status === "completed" ? "研讨已完成" : session?.status === "failed" ? "研讨失败" : session?.status === "paused" ? "等待人工确认" : currentStage ? stageLabel(currentStage) : "等待开始";
   const showCenteredWaiting = messages.length === 0 && active && !isLoading;
@@ -1001,6 +1031,15 @@ export function Workspace() {
     scrollMessagesToBottom("smooth");
   }, [messages, waitingPrompt, showBottomWaiting, showCompletedNotice, showFailedNotice]);
 
+  useEffect(() => {
+    setActiveReviewItemIndex(0);
+  }, [pendingReview?.id]);
+
+  useEffect(() => {
+    if (reviewQuestionCount === 0) return;
+    setActiveReviewItemIndex((current) => Math.min(current, reviewQuestionCount - 1));
+  }, [reviewQuestionCount]);
+
   async function submitHumanReview() {
     if (!pendingReview || reviewSubmitting) return;
     if (reviewExpired) {
@@ -1053,123 +1092,221 @@ export function Workspace() {
   return (
     <div className="h-screen bg-[#F8FAFC] flex flex-col font-sans overflow-hidden">
       {pendingReview && reviewDrawerOpen && (
-        <div className="fixed inset-x-0 bottom-24 top-20 z-[90] flex items-end justify-center bg-slate-900/25 px-4">
-          <div className="flex max-h-[min(70dvh,640px)] w-full max-w-3xl flex-col overflow-hidden rounded-t-2xl border border-blue-100 bg-white shadow-2xl">
-            <div className="border-b border-slate-100 px-6 py-5">
-              <div className="mb-4 flex items-start justify-between gap-4">
-                <div>
-                  <div className="text-xs font-semibold uppercase tracking-wide text-blue-600">人工确认</div>
-                  <h2 className="mt-1 text-lg font-bold leading-snug text-slate-900">
+        <div className="fixed inset-x-0 bottom-24 top-16 z-[90] flex items-end justify-center bg-slate-950/35 px-4 backdrop-blur-sm">
+          <div className="flex max-h-[min(76dvh,760px)] w-full max-w-5xl flex-col overflow-hidden rounded-[2rem] border border-white/80 bg-white shadow-[0_30px_90px_rgba(15,23,42,0.28)]">
+            <div className="grid border-b border-slate-200/80 bg-[radial-gradient(circle_at_top_left,_rgba(37,99,235,0.16),_transparent_36%),linear-gradient(135deg,_#ffffff_0%,_#f8fafc_58%,_#eff6ff_100%)] lg:grid-cols-[1.05fr_0.95fr]">
+              <div className="px-6 py-6 sm:px-8">
+                <div className="mb-4 flex items-start justify-between gap-4">
+                  <div>
+                    <div className="inline-flex items-center gap-2 rounded-full border border-blue-100 bg-white/80 px-3 py-1 text-xs font-semibold text-blue-700 shadow-sm">
+                      <span className="h-1.5 w-1.5 rounded-full bg-blue-600" />
+                      人工确认
+                    </div>
+                    <h2 className="mt-3 max-w-2xl text-2xl font-black leading-tight tracking-[-0.03em] text-slate-950">
                     {reviewQuestionItems.length > 1 ? "请确认以下决策口径" : pendingReview.question}
-                  </h2>
+                    </h2>
+                    <p className="mt-2 text-sm leading-6 text-slate-600">
+                      补齐关键口径后，Agent 将按你的确认继续推进后续研讨与纪要生成。
+                    </p>
+                  </div>
+                  <span className="shrink-0 rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-bold uppercase tracking-wide text-amber-700">
+                    {pendingReview.blocking_level}
+                  </span>
                 </div>
-                <span className="shrink-0 rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">
-                  {pendingReview.blocking_level}
-                </span>
               </div>
               {reviewRemainingMs !== null && (
-                <div className="rounded-xl border border-blue-100 bg-blue-50/70 px-4 py-3">
-                  <div className="mb-2 flex items-center justify-between gap-3 text-xs">
-                    <span className="font-semibold text-blue-700">剩余确认时间</span>
-                    <span className={cn("font-mono font-semibold", reviewExpired ? "text-red-600" : "text-blue-700")}>
-                      {reviewExpired ? "已超时" : formatCountdown(reviewRemainingMs)}
-                    </span>
+                <div className="flex items-stretch border-t border-slate-200/70 bg-white/70 text-slate-900 lg:border-l lg:border-t-0">
+                  <div className="flex flex-1 flex-col justify-between px-6 py-6 sm:px-8">
+                    <div>
+                      <div className="flex items-center justify-between gap-3 text-xs font-semibold text-slate-500">
+                        <span className="inline-flex items-center gap-2">
+                          <TimerReset className="h-4 w-4 text-blue-600" />
+                          剩余确认时间
+                        </span>
+                        <span className={cn("font-mono text-base font-black", reviewExpired ? "text-red-600" : "text-blue-700")}>
+                          {reviewExpired ? "已超时" : formatCountdown(reviewRemainingMs)}
+                        </span>
+                      </div>
+                      <div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-200">
+                        <div
+                          className={cn(
+                            "h-full rounded-full transition-[width] duration-1000",
+                            reviewExpired ? "bg-red-400" : "bg-gradient-to-r from-blue-400 via-cyan-300 to-emerald-300",
+                          )}
+                          style={{ width: `${reviewCountdownPercent}%` }}
+                        />
+                      </div>
+                    </div>
+                    <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
+                      <div className="rounded-2xl border border-slate-200 bg-white/80 px-3 py-3 shadow-sm">
+                        <div className="text-slate-500">待确认项</div>
+                        <div className="mt-1 text-lg font-black text-slate-950">{reviewQuestionItems.length || 1}</div>
+                      </div>
+                      <div className="rounded-2xl border border-amber-100 bg-amber-50/80 px-3 py-3 shadow-sm">
+                        <div className="text-amber-700">阻塞级别</div>
+                        <div className="mt-1 text-lg font-black capitalize text-amber-900">{pendingReview.blocking_level}</div>
+                      </div>
+                    </div>
+                    {pendingReview.expires_at && (
+                      <div className="mt-3 text-xs text-slate-500">超时时间：{formatDateTime(pendingReview.expires_at)}</div>
+                    )}
                   </div>
-                  <div className="h-2 overflow-hidden rounded-full bg-white">
-                    <div
-                      className={cn("h-full rounded-full transition-[width] duration-1000", reviewExpired ? "bg-red-500" : "bg-blue-600")}
-                      style={{ width: `${reviewCountdownPercent}%` }}
-                    />
-                  </div>
-                  {pendingReview.expires_at && (
-                    <div className="mt-2 text-xs text-slate-500">超时时间：{formatDateTime(pendingReview.expires_at)}</div>
-                  )}
                 </div>
               )}
             </div>
-            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-5">
-              {reviewQuestionItems.length > 1 && (
-                <section className="space-y-2">
-                  <div className="text-xs font-semibold text-slate-500">待确认项</div>
-                  <div className="space-y-2">
-                    {reviewQuestionItems.map((item, index) => (
-                      <div key={`${item}-${index}`} className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm text-slate-800">
-                        <div className="flex gap-3">
-                          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white text-xs font-semibold text-blue-600">
-                            {index + 1}
-                          </span>
-                          <span className="leading-relaxed">{item}</span>
-                        </div>
-                        <textarea
-                          value={reviewItemAnswers[index] ?? ""}
-                          onChange={(event) =>
-                            setReviewItemAnswers((current) => ({ ...current, [index]: event.target.value }))
-                          }
-                          rows={2}
-                          disabled={reviewExpired}
-                          className="mt-3 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100"
-                          placeholder={`填写第 ${index + 1} 项确认口径`}
-                        />
+            <div className="min-h-0 flex-1 space-y-5 overflow-y-auto bg-slate-50/70 px-5 py-5 sm:px-8">
+              {pendingReview && (
+                <section className="overflow-hidden rounded-[1.75rem] border border-slate-200 bg-white shadow-sm">
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
+                    <div>
+                      <div className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">逐题确认</div>
+                      <div className="mt-1 text-sm text-slate-500">
+                        已确认 {answeredReviewCount}/{reviewQuestionCount}，可手动切换上一题或下一题。
                       </div>
-                    ))}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={activeReviewQuestionIndex === 0}
+                        onClick={() => setActiveReviewItemIndex((index) => Math.max(0, index - 1))}
+                        className="inline-flex h-9 items-center gap-1 rounded-full border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                        上一题
+                      </button>
+                      <button
+                        type="button"
+                        disabled={activeReviewQuestionIndex >= reviewQuestionCount - 1}
+                        onClick={() => setActiveReviewItemIndex((index) => Math.min(reviewQuestionCount - 1, index + 1))}
+                        className="inline-flex h-9 items-center gap-1 rounded-full border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        下一题
+                        <ChevronRight className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="grid gap-5 p-5 lg:grid-cols-[0.72fr_1.28fr]">
+                    <div className="space-y-3">
+                      {Array.from({ length: reviewQuestionCount }, (_, index) => {
+                        const answered = Boolean(reviewItemAnswers[index]?.trim());
+                        return (
+                          <button
+                            key={index}
+                            type="button"
+                            onClick={() => setActiveReviewItemIndex(index)}
+                            className={cn(
+                              "flex w-full items-center gap-3 rounded-2xl border px-3 py-3 text-left text-sm transition",
+                              activeReviewQuestionIndex === index
+                                ? "border-blue-300 bg-blue-50 text-blue-950 shadow-[0_12px_30px_rgba(37,99,235,0.12)]"
+                                : "border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300 hover:bg-white",
+                            )}
+                          >
+                            <span
+                              className={cn(
+                                "flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-black",
+                                answered ? "bg-emerald-500 text-white" : activeReviewQuestionIndex === index ? "bg-blue-600 text-white" : "bg-white text-slate-500",
+                              )}
+                            >
+                              {answered ? <Check className="h-4 w-4" /> : index + 1}
+                            </span>
+                            <span className="line-clamp-2 leading-5">
+                              {reviewQuestionItems[index] ?? pendingReview.question}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="rounded-[1.5rem] border border-slate-200 bg-slate-50/80 p-4">
+                      <div className="flex items-start gap-3">
+                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-600 text-sm font-black text-white shadow-[0_8px_20px_rgba(37,99,235,0.25)]">
+                          {activeReviewQuestionIndex + 1}
+                        </span>
+                        <div>
+                          <div className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">
+                            问题 {activeReviewQuestionIndex + 1}/{reviewQuestionCount}
+                          </div>
+                          <div className="mt-1 text-base font-bold leading-7 text-slate-950">{activeReviewQuestion}</div>
+                        </div>
+                      </div>
+                      {activeReviewOptions.length > 0 && (
+                        <div className="mt-5 space-y-2">
+                          <div className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">推荐选项</div>
+                          <div className="grid gap-2">
+                            {activeReviewOptions.map((option, index) => {
+                              const selected = activeReviewAnswer.trim() === option.label.trim();
+                              return (
+                                <button
+                                  key={`${option.source}-${option.label}-${index}`}
+                                  type="button"
+                                  disabled={reviewExpired}
+                                  onClick={() => {
+                                    setSelectedReviewOption(option.source);
+                                    setReviewItemAnswers((current) => ({
+                                      ...current,
+                                      [activeReviewQuestionIndex]: option.label,
+                                    }));
+                                  }}
+                                  className={cn(
+                                    "flex items-start gap-3 rounded-2xl border px-4 py-3 text-left text-sm transition disabled:cursor-not-allowed disabled:opacity-60",
+                                    selected
+                                      ? "border-blue-300 bg-white text-blue-950 shadow-[0_12px_28px_rgba(37,99,235,0.12)]"
+                                      : "border-slate-200 bg-white/70 text-slate-700 hover:border-blue-200 hover:bg-white",
+                                  )}
+                                >
+                                  <span
+                                    className={cn(
+                                      "mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border",
+                                      selected ? "border-blue-600 bg-blue-600 text-white" : "border-slate-300 bg-white text-transparent",
+                                    )}
+                                  >
+                                    <Check className="h-3.5 w-3.5" />
+                                  </span>
+                                  <span className="leading-6">{option.label}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                      <textarea
+                        value={activeReviewAnswer}
+                        onChange={(event) =>
+                          setReviewItemAnswers((current) => ({ ...current, [activeReviewQuestionIndex]: event.target.value }))
+                        }
+                        rows={3}
+                        disabled={reviewExpired}
+                        className="mt-5 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100"
+                        placeholder={`填写第 ${activeReviewQuestionIndex + 1} 项确认口径`}
+                      />
+                    </div>
                   </div>
                 </section>
               )}
-              <div className="space-y-3 text-sm text-slate-600">
-                {pendingReview.reason && <p className="leading-relaxed">{pendingReview.reason}</p>}
+              <div className="grid gap-3 text-sm text-slate-600 lg:grid-cols-[1.2fr_0.8fr]">
+                {pendingReview.reason && (
+                  <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-sm">
+                    <div className="mb-2 text-xs font-bold uppercase tracking-[0.18em] text-slate-500">决策背景</div>
+                    <p className="leading-6 text-slate-700">{pendingReview.reason}</p>
+                  </div>
+                )}
                 {pendingReview.impact && (
-                  <div className="rounded-xl bg-slate-50 px-4 py-3">
-                    <div className="text-xs font-semibold text-slate-500">影响范围</div>
-                    <div className="mt-1 text-slate-700">{pendingReview.impact}</div>
+                  <div className="rounded-2xl border border-amber-100 bg-amber-50/70 px-4 py-4 shadow-sm">
+                    <div className="text-xs font-bold uppercase tracking-[0.18em] text-amber-700">影响范围</div>
+                    <div className="mt-2 leading-6 text-amber-950">{pendingReview.impact}</div>
                   </div>
                 )}
               </div>
-              {pendingReview.options.length > 0 && (
-                <section className="space-y-2">
-                  <div className="text-xs font-semibold text-slate-500">可选确认口径</div>
-                  {pendingReview.options.map((option) => {
-                    const optionItems = splitNumberedItems(option);
-                    return (
-                      <label
-                        key={option}
-                        className="flex cursor-pointer items-start gap-3 rounded-xl border border-slate-100 px-4 py-3 text-sm text-slate-700 hover:bg-blue-50"
-                      >
-                        <input
-                          type="radio"
-                          name="human-review-option"
-                          value={option}
-                          checked={selectedReviewOption === option}
-                          disabled={reviewExpired}
-                          className="mt-1"
-                          onChange={() => {
-                            setSelectedReviewOption(option);
-                          }}
-                        />
-                        <span className="space-y-1 leading-relaxed">
-                          {optionItems.length > 1 ? (
-                            optionItems.map((item, index) => (
-                              <span key={`${item}-${index}`} className="block">
-                                <span className="mr-1 font-semibold text-slate-500">{index + 1}.</span>
-                                {item}
-                              </span>
-                            ))
-                          ) : (
-                            option
-                          )}
-                        </span>
-                      </label>
-                    );
-                  })}
-                </section>
-              )}
-              <textarea
-                value={reviewAnswer}
-                onChange={(event) => setReviewAnswer(event.target.value)}
-                rows={4}
-                disabled={reviewExpired}
-                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50"
-                placeholder="补充说明，或在上方逐项填写确认口径"
-              />
+              <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="mb-3 text-xs font-bold uppercase tracking-[0.18em] text-slate-500">补充说明</div>
+                <textarea
+                  value={reviewAnswer}
+                  onChange={(event) => setReviewAnswer(event.target.value)}
+                  rows={4}
+                  disabled={reviewExpired}
+                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50"
+                  placeholder="补充说明，或在上方逐项填写确认口径"
+                />
+              </div>
               {reviewError && <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{reviewError}</div>}
             </div>
           </div>
@@ -1485,13 +1622,13 @@ export function Workspace() {
           </div>
           {session && (
             <div className="shrink-0">
-              <div className="flex items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-white px-5 py-3 shadow-lg">
+              <div className="flex items-center justify-between gap-4 rounded-[1.5rem] border border-white/80 bg-white/95 px-5 py-4 shadow-[0_18px_48px_rgba(15,23,42,0.14)] backdrop-blur">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className={cn("h-2.5 w-2.5 rounded-full", pendingReview ? "bg-amber-500" : terminal ? "bg-emerald-500" : "bg-blue-500")} />
+                    <span className={cn("h-3 w-3 rounded-full ring-4", pendingReview ? "bg-amber-500 ring-amber-100" : terminal ? "bg-emerald-500 ring-emerald-100" : "bg-blue-500 ring-blue-100")} />
                     <span className="text-sm font-semibold text-slate-900">{controlBarStatus}</span>
                     {pendingReview && (
-                      <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-700">
+                      <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-bold uppercase text-amber-700">
                         {pendingReview.blocking_level}
                       </span>
                     )}
@@ -1510,7 +1647,7 @@ export function Workspace() {
                     type="button"
                     disabled={!pendingReview}
                     onClick={() => setReviewDrawerOpen((open) => !open)}
-                    className="rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-700 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {pendingReview ? (reviewDrawerOpen ? "收起面板" : "展开确认") : "人工确认"}
                   </button>
@@ -1518,7 +1655,7 @@ export function Workspace() {
                     type="button"
                     onClick={submitHumanReview}
                     disabled={!pendingReview || reviewSubmitting || reviewExpired}
-                    className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                    className="rounded-2xl bg-blue-600 px-5 py-2.5 text-sm font-black text-white shadow-[0_14px_28px_rgba(37,99,235,0.28)] transition hover:-translate-y-0.5 hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     {!pendingReview ? "暂无待确认" : reviewExpired ? "等待超时处理" : reviewSubmitting ? "提交中..." : "提交确认"}
                   </button>

@@ -305,16 +305,17 @@ describe("Workspace agentic orchestration events", () => {
       </MemoryRouter>,
     );
 
-    await screen.findByText("30元阈值按含税还是未税计算？");
+    expect((await screen.findAllByText("30元阈值按含税还是未税计算？")).length).toBeGreaterThan(0);
     expect(screen.getByText("是否排除纸质发票？")).toBeInTheDocument();
     expect(screen.getByText("剩余确认时间")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("按含税金额计算；"));
     fireEvent.change(screen.getByPlaceholderText("填写第 1 项确认口径"), {
       target: { value: "按单张发票含税金额计算" },
     });
+    fireEvent.click(screen.getByText("下一题"));
     fireEvent.change(screen.getByPlaceholderText("填写第 2 项确认口径"), {
       target: { value: "纸质发票先排除" },
     });
-    fireEvent.click(screen.getByText("按含税金额计算；"));
     fireEvent.click(screen.getByText("提交确认"));
 
     await waitFor(() =>

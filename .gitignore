@@ -20,3 +20,7 @@ api-server.log
 # Frontend
 node_modules/
 dist/
+
+# Editor / tools
+.codex/
+.playwright-mcp/
