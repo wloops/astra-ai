@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import { Workspace } from "./Workspace";
+import { apiClient } from "../api/client";
 
 vi.mock("../components/dashboard/Navbar", () => ({
   Navbar: () => <div data-testid="navbar" />,
@@ -50,6 +51,10 @@ vi.mock("../api/client", () => ({
       total: 3,
       offset: 0,
       limit: 50,
+    }),
+    respondHumanReview: vi.fn().mockResolvedValue({
+      id: "review_1",
+      status: "resolved",
     }),
   },
 }));
@@ -157,6 +162,28 @@ vi.mock("../api/events", () => ({
         payload: {},
         created_at: "2026-05-08T00:00:10Z",
       });
+      callbacks.onEvent({
+        id: "event_11",
+        session_id: "session_1",
+        sequence: 11,
+        type: "human_review_requested",
+        stage: "human_review",
+        role_code: "host",
+        payload: {
+          id: "review_1",
+          session_id: "session_1",
+          question: "1. 30元阈值按含税还是未税计算？ 2. 是否排除纸质发票？",
+          reason: "需要财务口径",
+          blocking_level: "medium",
+          options: ["1. 按含税金额计算；2. 排除纸质发票", "1. 按未税金额计算；2. 暂不排除纸质发票"],
+          status: "pending",
+          default_on_timeout: "mark_open_question",
+          impact: "影响自动结算规则",
+          requested_at: "2099-05-08T00:00:11Z",
+          expires_at: "2099-05-08T00:02:11Z",
+        },
+        created_at: "2026-05-08T00:00:11Z",
+      });
     });
     return { close: vi.fn() };
   }),
@@ -183,7 +210,7 @@ describe("Workspace agentic orchestration events", () => {
     expect(screen.getAllByText("并行处理中").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Hello streaming")).toHaveLength(1);
     expect(screen.getByText("Parallel complete")).toBeInTheDocument();
-    expect(screen.getByText("主持人正在裁决总结...")).toBeInTheDocument();
+    expect(screen.getByText("等待人工确认后继续研讨...")).toBeInTheDocument();
   });
 
   it("pauses auto-scroll when the user scrolls away from the bottom", async () => {
@@ -205,5 +232,38 @@ describe("Workspace agentic orchestration events", () => {
 
     fireEvent.click(screen.getByLabelText("滚动到底部"));
     await waitFor(() => expect(screen.queryByLabelText("滚动到底部")).not.toBeInTheDocument());
+  });
+
+  it("renders and submits a human review prompt", async () => {
+    render(
+      <MemoryRouter initialEntries={["/workspace?sessionId=session_1"]}>
+        <Routes>
+          <Route path="/workspace" element={<Workspace />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("30元阈值按含税还是未税计算？");
+    expect(screen.getByText("是否排除纸质发票？")).toBeInTheDocument();
+    expect(screen.getByText("剩余确认时间")).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText("填写第 1 项确认口径"), {
+      target: { value: "按单张发票含税金额计算" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("填写第 2 项确认口径"), {
+      target: { value: "纸质发票先排除" },
+    });
+    fireEvent.click(screen.getByText("按含税金额计算；"));
+    fireEvent.click(screen.getByText("提交确认"));
+
+    await waitFor(() =>
+      expect(apiClient.respondHumanReview).toHaveBeenCalledWith(
+        "session_1",
+        "review_1",
+        expect.objectContaining({
+          answer: expect.stringContaining("1. 30元阈值按含税还是未税计算？\n确认：按单张发票含税金额计算"),
+          selected_option: "1. 按含税金额计算；2. 排除纸质发票",
+        }),
+      ),
+    );
   });
 });

@@ -13,14 +13,17 @@ import {
   Grid2X2,
   LoaderCircle,
   MessageSquare,
+  Pause,
+  Play,
   Scale,
   ShieldCheck,
+  Square,
   Target,
   User,
 } from "lucide-react";
 import { apiClient } from "../api/client";
 import { subscribeToSessionEvents } from "../api/events";
-import type { AgentRole, DiscussionSession, HostDecision, KnowledgeReference, Project, ScenarioTemplate, SessionEvent } from "../api/types";
+import type { AgentRole, DiscussionSession, HostDecision, HumanReviewRequest, KnowledgeReference, Project, ScenarioTemplate, SessionEvent } from "../api/types";
 import { Navbar } from "../components/dashboard/Navbar";
 import { cn } from "../lib/utils";
 
@@ -175,6 +178,13 @@ function asHostDecision(payload: Record<string, unknown>): HostDecision {
   return {
     action: String(payload.action ?? "NEXT_STAGE") as HostDecision["action"],
     reason: asText(payload.reason),
+    question: typeof payload.question === "string" ? payload.question : null,
+    blocking_level: typeof payload.blocking_level === "string" ? payload.blocking_level : null,
+    options: Array.isArray(payload.options) ? payload.options.map(String) : [],
+    default_on_timeout: typeof payload.default_on_timeout === "string" ? payload.default_on_timeout as HostDecision["default_on_timeout"] : null,
+    default_answer: typeof payload.default_answer === "string" ? payload.default_answer : null,
+    timeout_seconds: typeof payload.timeout_seconds === "number" ? payload.timeout_seconds : null,
+    impact: typeof payload.impact === "string" ? payload.impact : null,
     query: typeof payload.query === "string" ? payload.query : null,
     stage: typeof payload.stage === "string" ? payload.stage : null,
     stage_name: typeof payload.stage_name === "string" ? payload.stage_name : null,
@@ -192,6 +202,7 @@ function asHostDecision(payload: Record<string, unknown>): HostDecision {
 
 function hostDecisionLabel(decision: HostDecision): string {
   if (decision.phase === "initial_planning") return "会前组队";
+  if (decision.action === "REQUEST_HUMAN_REVIEW") return "人工确认";
   if (decision.action === "ADD_STAGE") return "新增阶段";
   if (decision.action === "SKIP_STAGE") return "跳过阶段";
   if (decision.action === "PULL_ROLE") return "补充角色";
@@ -205,7 +216,56 @@ function hostDecisionFallback(decision: HostDecision): string {
   if (decision.phase === "initial_planning" && decision.selected_role_codes?.length) {
     return `本轮参会角色：${decision.selected_role_codes.join("、")}`;
   }
+  if (decision.action === "REQUEST_HUMAN_REVIEW" && decision.question) {
+    return decision.question;
+  }
   return "Host Agent 已给出阶段判断";
+}
+
+function asHumanReviewRequest(payload: Record<string, unknown>): HumanReviewRequest | null {
+  if (typeof payload.id !== "string" || typeof payload.question !== "string") return null;
+  return {
+    id: payload.id,
+    session_id: typeof payload.session_id === "string" ? payload.session_id : "",
+    question: payload.question,
+    reason: typeof payload.reason === "string" ? payload.reason : "",
+    blocking_level: typeof payload.blocking_level === "string" ? payload.blocking_level : "medium",
+    options: Array.isArray(payload.options) ? payload.options.map(String) : [],
+    status: payload.status === "resolved" || payload.status === "timed_out" ? payload.status : "pending",
+    response: payload.response && typeof payload.response === "object" ? payload.response as Record<string, unknown> : null,
+    default_on_timeout:
+      payload.default_on_timeout === "use_default" || payload.default_on_timeout === "abort_if_blocking"
+        ? payload.default_on_timeout
+        : "mark_open_question",
+    default_answer: typeof payload.default_answer === "string" ? payload.default_answer : "",
+    impact: typeof payload.impact === "string" ? payload.impact : "",
+    requested_at: typeof payload.requested_at === "string" ? payload.requested_at : "",
+    expires_at: typeof payload.expires_at === "string" ? payload.expires_at : null,
+    resolved_at: typeof payload.resolved_at === "string" ? payload.resolved_at : null,
+  };
+}
+
+function appendMessageOnce(current: AgentMessage[], message: AgentMessage): AgentMessage[] {
+  return current.some((item) => item.id === message.id) ? current : [...current, message];
+}
+
+function splitNumberedItems(value: string): string[] {
+  const text = value.replace(/\s+/g, " ").trim();
+  if (!text) return [];
+  const marked = text.replace(/\s*(\d+)[.、．]\s*/g, "\n$1. ");
+  const parts = marked
+    .split(/\n+/)
+    .map((item) => item.replace(/^\d+[.、．]\s*/, "").trim())
+    .filter(Boolean);
+  return parts.length > 1 ? parts : [text];
+}
+
+function formatCountdown(ms: number): string {
+  const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes <= 0) return `${seconds} 秒`;
+  return `${minutes} 分 ${seconds.toString().padStart(2, "0")} 秒`;
 }
 
 export function Workspace() {
@@ -222,6 +282,13 @@ export function Workspace() {
   const [isLoading, setIsLoading] = useState(Boolean(sessionId));
   const [reconnecting, setReconnecting] = useState(false);
   const [heartbeatWarning, setHeartbeatWarning] = useState(false);
+  const [pendingReview, setPendingReview] = useState<HumanReviewRequest | null>(null);
+  const [reviewDrawerOpen, setReviewDrawerOpen] = useState(true);
+  const [reviewAnswer, setReviewAnswer] = useState("");
+  const [reviewItemAnswers, setReviewItemAnswers] = useState<Record<number, string>>({});
+  const [selectedReviewOption, setSelectedReviewOption] = useState("");
+  const [reviewSubmitting, setReviewSubmitting] = useState(false);
+  const [reviewError, setReviewError] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [mobileTab, setMobileTab] = useState<'progress' | 'context' | 'monitor'>('progress');
   const sessionStatusRef = useRef<string | null>(null);
@@ -255,6 +322,7 @@ export function Workspace() {
         if (cancelled) return;
 
         setSession(sessionData);
+        setPendingReview((current) => sessionData.pending_human_review ?? current);
         setProject(projectList.items.find((item) => item.id === sessionData.project_id) ?? null);
         setScenario(scenarioList.items.find((item) => item.id === sessionData.scenario_id) ?? null);
         setRoles(roleList.items);
@@ -287,6 +355,79 @@ export function Workspace() {
         }
         if (event.type === "parallel_complete" && event.stage) {
           activeParallelStagesRef.current.delete(event.stage);
+        }
+
+        if (event.type === "human_review_requested") {
+          const review = asHumanReviewRequest(event.payload);
+          if (review) {
+            setPendingReview(review);
+            setReviewDrawerOpen(true);
+            setReviewAnswer("");
+            setReviewItemAnswers({});
+            setSelectedReviewOption("");
+            setReviewError(null);
+            setSession((current) => (current ? { ...current, status: "paused" } : current));
+            sessionStatusRef.current = "paused";
+            setMessages((current) =>
+              appendMessageOnce(current, {
+                id: event.id,
+                roleName: "host",
+                stage: "human_review",
+                content: `请求人工确认：${review.question}`,
+                targetContent: `请求人工确认：${review.question}`,
+                createdAt: event.created_at,
+                roleCode: "host",
+                streaming: false,
+                streamMode: "none",
+              }),
+            );
+          }
+        }
+
+        if (event.type === "human_review_resolved") {
+          const review = asHumanReviewRequest(event.payload);
+          setPendingReview(null);
+          setReviewDrawerOpen(false);
+          setReviewSubmitting(false);
+          setReviewError(null);
+          setSession((current) => (current ? { ...current, status: "running" } : current));
+          sessionStatusRef.current = "running";
+          setMessages((current) =>
+            appendMessageOnce(current, {
+              id: event.id,
+              roleName: "host",
+              stage: "human_review",
+              content: `人工确认已完成：${review?.question ?? "用户回答已接收"}`,
+              targetContent: `人工确认已完成：${review?.question ?? "用户回答已接收"}`,
+              createdAt: event.created_at,
+              roleCode: "host",
+              streaming: false,
+              streamMode: "none",
+            }),
+          );
+        }
+
+        if (event.type === "human_review_timeout") {
+          const review = asHumanReviewRequest(event.payload);
+          setPendingReview(null);
+          setReviewDrawerOpen(false);
+          setReviewSubmitting(false);
+          setReviewError(null);
+          setSession((current) => (current ? { ...current, status: "running" } : current));
+          sessionStatusRef.current = "running";
+          setMessages((current) =>
+            appendMessageOnce(current, {
+              id: event.id,
+              roleName: "host",
+              stage: "human_review",
+              content: `人工确认超时：${review?.question ?? "已按超时策略继续"}`,
+              targetContent: `人工确认超时：${review?.question ?? "已按超时策略继续"}`,
+              createdAt: event.created_at,
+              roleCode: "host",
+              streaming: false,
+              streamMode: "none",
+            }),
+          );
         }
 
         if (event.type === "agent_message_delta") {
@@ -576,7 +717,7 @@ export function Workspace() {
     .reverse()
     .find((event) => event.type === "stage_started" && event.stage)?.stage;
   const terminal = session?.status === "completed" || session?.status === "failed";
-  const active = session?.status === "pending" || session?.status === "running";
+  const active = session?.status === "pending" || session?.status === "running" || session?.status === "paused";
   const currentStage = terminal ? session?.current_stage ?? "" : latestStartedStage ?? session?.current_stage ?? "";
   const completedStages = useMemo(() => {
     const completed = new Set(
@@ -600,9 +741,9 @@ export function Workspace() {
   }, [currentStage, events, session?.status, skippedStageReasons, stages]);
   useEffect(() => {
     if (!active) return;
-    const timer = window.setInterval(() => setNowMs(Date.now()), 30_000);
+    const timer = window.setInterval(() => setNowMs(Date.now()), pendingReview ? 1_000 : 30_000);
     return () => window.clearInterval(timer);
-  }, [active]);
+  }, [active, pendingReview]);
 
   const overviewProgress = stages.length ? Math.round((completedStages.size / stages.length) * 100) : 0;
   const sessionStartedAt = parseBackendDate(session?.created_at);
@@ -629,11 +770,63 @@ export function Workspace() {
     { label: "已识别争议", value: `${conflictCount} 个` },
     { label: "已调用工具", value: `${toolCallCount} 次` },
   ];
+  const reviewQuestionItems = pendingReview ? splitNumberedItems(pendingReview.question) : [];
+  const reviewRequestedAt = parseBackendDate(pendingReview?.requested_at);
+  const reviewExpiresAt = parseBackendDate(pendingReview?.expires_at);
+  const reviewRemainingMs = reviewExpiresAt ? Math.max(0, reviewExpiresAt.getTime() - nowMs) : null;
+  const reviewTotalMs =
+    reviewRequestedAt && reviewExpiresAt
+      ? Math.max(1, reviewExpiresAt.getTime() - reviewRequestedAt.getTime())
+      : null;
+  const reviewCountdownPercent =
+    reviewRemainingMs !== null && reviewTotalMs !== null
+      ? Math.max(0, Math.min(100, Math.round((reviewRemainingMs / reviewTotalMs) * 100)))
+      : 0;
+  const reviewExpired = reviewRemainingMs !== null && reviewRemainingMs <= 0;
   const currentStageText =
-    session?.status === "completed" ? "研讨已完成" : session?.status === "failed" ? "研讨失败" : currentStage ? stageLabel(currentStage) : "等待开始";
+    session?.status === "completed" ? "研讨已完成" : session?.status === "failed" ? "研讨失败" : session?.status === "paused" ? "等待人工确认" : currentStage ? stageLabel(currentStage) : "等待开始";
   const showCenteredWaiting = messages.length === 0 && active && !isLoading;
   const showBottomWaiting = messages.length > 0 && active;
-  const waitingPrompt = stageWaitingPrompt(currentStage);
+  const waitingPrompt = pendingReview ? "等待人工确认后继续研讨..." : stageWaitingPrompt(currentStage);
+  const controlBarStatus = pendingReview
+    ? "等待人工确认"
+    : session?.status === "completed"
+      ? "研讨已完成"
+      : session?.status === "failed"
+        ? "研讨失败"
+        : currentStage
+          ? stageLabel(currentStage)
+          : "等待会议状态";
+  const controlBarDetail = pendingReview
+    ? reviewQuestionItems.length > 1
+      ? `${reviewQuestionItems.length} 个待确认项`
+      : pendingReview.question
+    : session?.status === "completed"
+      ? "可查看会议结果"
+      : session?.status === "failed"
+        ? session.error_message ?? "请查看失败原因"
+        : waitingPrompt;
+  const sessionControlActions = [
+    {
+      label: "暂停研讨",
+      icon: Pause,
+      disabled: true,
+      reason: "暂停接口待接入",
+    },
+    {
+      label: "继续研讨",
+      icon: Play,
+      disabled: !pendingReview,
+      reason: pendingReview ? "展开人工确认后提交继续" : "暂无待确认事项",
+      onClick: () => setReviewDrawerOpen(true),
+    },
+    {
+      label: "结束研讨",
+      icon: Square,
+      disabled: true,
+      reason: "结束接口待接入",
+    },
+  ];
   const showCompletedNotice = session?.status === "completed";
   const showFailedNotice = session?.status === "failed";
   const loadContextEvent = events.find((event) => event.type === "stage_completed" && event.stage === "load_context");
@@ -669,6 +862,40 @@ export function Workspace() {
     scrollMessagesToBottom("smooth");
   }, [messages, waitingPrompt, showBottomWaiting, showCompletedNotice, showFailedNotice]);
 
+  async function submitHumanReview() {
+    if (!pendingReview || reviewSubmitting) return;
+    if (reviewExpired) {
+      setReviewError("该确认请求已超时，正在等待后端按超时策略继续。");
+      return;
+    }
+    const itemAnswers = reviewQuestionItems
+      .map((question, index) => {
+        const answer = reviewItemAnswers[index]?.trim();
+        return answer ? `${index + 1}. ${question}\n确认：${answer}` : "";
+      })
+      .filter(Boolean);
+    const answer = [
+      selectedReviewOption.trim() ? `选择口径：${selectedReviewOption.trim()}` : "",
+      ...itemAnswers,
+      reviewAnswer.trim() ? `补充说明：${reviewAnswer.trim()}` : "",
+    ].filter(Boolean).join("\n\n");
+    if (!answer) {
+      setReviewError("请填写至少一个待确认项、选择一个口径或补充说明。");
+      return;
+    }
+    try {
+      setReviewSubmitting(true);
+      setReviewError(null);
+      await apiClient.respondHumanReview(sessionId, pendingReview.id, {
+        answer,
+        selected_option: selectedReviewOption || null,
+      });
+    } catch (err) {
+      setReviewSubmitting(false);
+      setReviewError(err instanceof Error ? err.message : "提交人工确认失败");
+    }
+  }
+
   if (!sessionId) {
     return (
       <div className="min-h-screen bg-[#F8FAFC] font-sans">
@@ -686,12 +913,137 @@ export function Workspace() {
 
   return (
     <div className="h-screen bg-[#F8FAFC] flex flex-col font-sans overflow-hidden">
+      {pendingReview && reviewDrawerOpen && (
+        <div className="fixed inset-x-0 bottom-24 top-20 z-[90] flex items-end justify-center bg-slate-900/25 px-4">
+          <div className="flex max-h-[min(70dvh,640px)] w-full max-w-3xl flex-col overflow-hidden rounded-t-2xl border border-blue-100 bg-white shadow-2xl">
+            <div className="border-b border-slate-100 px-6 py-5">
+              <div className="mb-4 flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-wide text-blue-600">人工确认</div>
+                  <h2 className="mt-1 text-lg font-bold leading-snug text-slate-900">
+                    {reviewQuestionItems.length > 1 ? "请确认以下决策口径" : pendingReview.question}
+                  </h2>
+                </div>
+                <span className="shrink-0 rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">
+                  {pendingReview.blocking_level}
+                </span>
+              </div>
+              {reviewRemainingMs !== null && (
+                <div className="rounded-xl border border-blue-100 bg-blue-50/70 px-4 py-3">
+                  <div className="mb-2 flex items-center justify-between gap-3 text-xs">
+                    <span className="font-semibold text-blue-700">剩余确认时间</span>
+                    <span className={cn("font-mono font-semibold", reviewExpired ? "text-red-600" : "text-blue-700")}>
+                      {reviewExpired ? "已超时" : formatCountdown(reviewRemainingMs)}
+                    </span>
+                  </div>
+                  <div className="h-2 overflow-hidden rounded-full bg-white">
+                    <div
+                      className={cn("h-full rounded-full transition-[width] duration-1000", reviewExpired ? "bg-red-500" : "bg-blue-600")}
+                      style={{ width: `${reviewCountdownPercent}%` }}
+                    />
+                  </div>
+                  {pendingReview.expires_at && (
+                    <div className="mt-2 text-xs text-slate-500">超时时间：{formatDateTime(pendingReview.expires_at)}</div>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-5">
+              {reviewQuestionItems.length > 1 && (
+                <section className="space-y-2">
+                  <div className="text-xs font-semibold text-slate-500">待确认项</div>
+                  <div className="space-y-2">
+                    {reviewQuestionItems.map((item, index) => (
+                      <div key={`${item}-${index}`} className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm text-slate-800">
+                        <div className="flex gap-3">
+                          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white text-xs font-semibold text-blue-600">
+                            {index + 1}
+                          </span>
+                          <span className="leading-relaxed">{item}</span>
+                        </div>
+                        <textarea
+                          value={reviewItemAnswers[index] ?? ""}
+                          onChange={(event) =>
+                            setReviewItemAnswers((current) => ({ ...current, [index]: event.target.value }))
+                          }
+                          rows={2}
+                          disabled={reviewExpired}
+                          className="mt-3 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100"
+                          placeholder={`填写第 ${index + 1} 项确认口径`}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
+              <div className="space-y-3 text-sm text-slate-600">
+                {pendingReview.reason && <p className="leading-relaxed">{pendingReview.reason}</p>}
+                {pendingReview.impact && (
+                  <div className="rounded-xl bg-slate-50 px-4 py-3">
+                    <div className="text-xs font-semibold text-slate-500">影响范围</div>
+                    <div className="mt-1 text-slate-700">{pendingReview.impact}</div>
+                  </div>
+                )}
+              </div>
+              {pendingReview.options.length > 0 && (
+                <section className="space-y-2">
+                  <div className="text-xs font-semibold text-slate-500">可选确认口径</div>
+                  {pendingReview.options.map((option) => {
+                    const optionItems = splitNumberedItems(option);
+                    return (
+                      <label
+                        key={option}
+                        className="flex cursor-pointer items-start gap-3 rounded-xl border border-slate-100 px-4 py-3 text-sm text-slate-700 hover:bg-blue-50"
+                      >
+                        <input
+                          type="radio"
+                          name="human-review-option"
+                          value={option}
+                          checked={selectedReviewOption === option}
+                          disabled={reviewExpired}
+                          className="mt-1"
+                          onChange={() => {
+                            setSelectedReviewOption(option);
+                          }}
+                        />
+                        <span className="space-y-1 leading-relaxed">
+                          {optionItems.length > 1 ? (
+                            optionItems.map((item, index) => (
+                              <span key={`${item}-${index}`} className="block">
+                                <span className="mr-1 font-semibold text-slate-500">{index + 1}.</span>
+                                {item}
+                              </span>
+                            ))
+                          ) : (
+                            option
+                          )}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </section>
+              )}
+              <textarea
+                value={reviewAnswer}
+                onChange={(event) => setReviewAnswer(event.target.value)}
+                rows={4}
+                disabled={reviewExpired}
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50"
+                placeholder="补充说明，或在上方逐项填写确认口径"
+              />
+              {reviewError && <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{reviewError}</div>}
+            </div>
+          </div>
+        </div>
+      )}
       <Navbar activePage="工作台" />
       <div className="flex-1 flex gap-4 p-4 overflow-hidden">
         <aside className="hidden lg:flex lg:flex-col w-[320px] gap-4 overflow-y-auto pr-1 shrink-0">
           <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-bold text-slate-900">多 Agent 智能研讨中</h2>
+              <div>
+                <h2 className="text-lg font-bold text-slate-900">多 Agent 智能研讨中</h2>
+              </div>
               <div className="flex items-center gap-1.5 px-2.5 py-1 bg-blue-50 text-blue-600 rounded-full text-xs font-medium">
                 <span className="relative flex h-2 w-2">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
@@ -777,9 +1129,29 @@ export function Workspace() {
 
         <main className="flex-1 flex flex-col gap-4 overflow-hidden">
           <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 shrink-0">
-            <div className="flex items-center gap-2 mb-4">
-              <MessageSquare className="w-4 h-4 text-slate-500" />
-              <h3 className="font-semibold text-slate-900">Agent 发言流</h3>
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div className="flex min-w-0 items-center gap-2">
+                <MessageSquare className="w-4 h-4 shrink-0 text-slate-500" />
+                <h3 className="truncate font-semibold text-slate-900">Agent 发言流</h3>
+              </div>
+              <div className="flex shrink-0 items-center gap-1.5" aria-label="研讨控制">
+                {sessionControlActions.map((action) => {
+                  const Icon = action.icon;
+                  return (
+                    <button
+                      key={action.label}
+                      type="button"
+                      aria-label={action.label}
+                      title={action.disabled ? action.reason : action.label}
+                      disabled={action.disabled}
+                      onClick={action.onClick}
+                      className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-45"
+                    >
+                      <Icon className="h-4 w-4" />
+                    </button>
+                  );
+                })}
+              </div>
             </div>
             {reconnecting && (
               <div className="mb-3 rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm text-amber-700 flex items-center gap-2">
@@ -824,7 +1196,7 @@ export function Workspace() {
             ref={messagesContainerRef}
             onScroll={handleMessagesScroll}
             aria-label="Agent 发言列表"
-            className="relative flex-1 bg-white rounded-2xl shadow-sm border border-slate-100 overflow-y-auto p-6 space-y-6"
+            className="relative flex-1 bg-white rounded-2xl shadow-sm border border-slate-100 overflow-y-auto p-6 pb-4 space-y-6"
           >
             {messages.length === 0 && (
               <div className="h-full flex flex-col items-center justify-center gap-2 text-sm text-slate-400">
@@ -900,6 +1272,49 @@ export function Workspace() {
               </div>
             )}
           </div>
+          {session && (
+            <div className="shrink-0">
+              <div className="flex items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-white px-5 py-3 shadow-lg">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className={cn("h-2.5 w-2.5 rounded-full", pendingReview ? "bg-amber-500" : terminal ? "bg-emerald-500" : "bg-blue-500")} />
+                    <span className="text-sm font-semibold text-slate-900">{controlBarStatus}</span>
+                    {pendingReview && (
+                      <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-700">
+                        {pendingReview.blocking_level}
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-1 flex min-w-0 items-center gap-3 text-xs text-slate-500">
+                    <span className="truncate">{controlBarDetail}</span>
+                    {pendingReview && reviewRemainingMs !== null && (
+                      <span className={cn("shrink-0 font-mono font-semibold", reviewExpired ? "text-red-600" : "text-blue-600")}>
+                        {reviewExpired ? "已超时" : formatCountdown(reviewRemainingMs)}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={!pendingReview}
+                    onClick={() => setReviewDrawerOpen((open) => !open)}
+                    className="rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {pendingReview ? (reviewDrawerOpen ? "收起面板" : "展开确认") : "人工确认"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={submitHumanReview}
+                    disabled={!pendingReview || reviewSubmitting || reviewExpired}
+                    className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {!pendingReview ? "暂无待确认" : reviewExpired ? "等待超时处理" : reviewSubmitting ? "提交中..." : "提交确认"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </main>
 
         <aside className="hidden lg:flex lg:flex-col w-[360px] gap-4 overflow-y-auto pl-1 pr-1 shrink-0">

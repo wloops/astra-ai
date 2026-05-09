@@ -1,5 +1,7 @@
 import asyncio
+import threading
 import time
+from datetime import timedelta
 
 from fastapi.testclient import TestClient
 from sqlmodel import select
@@ -8,7 +10,7 @@ from astra_api.config import settings
 from astra_api.db import get_session
 from astra_api.main import app
 from astra_api.knowledge import create_entry
-from astra_api.models import AgentRole, DiscussionSession, EventType, KnowledgeEntry, Project, ScenarioTemplate, SessionEvent, SessionResult, SessionStatus
+from astra_api.models import AgentRole, DiscussionSession, EventType, HumanReviewRequest, HumanReviewStatus, KnowledgeEntry, Project, ScenarioTemplate, SessionEvent, SessionResult, SessionStatus, utc_now
 from astra_api.orchestrator import gateway, run_session_workflow
 
 
@@ -37,12 +39,38 @@ def _create_session(topic: str = "agentic orchestration test") -> str:
 
 def _wait_done(session_id: str) -> None:
     timeout = time.time() + 15
-    with client:
-        while time.time() < timeout:
-            status = client.get(f"/sessions/{session_id}").json()["status"]
-            if status in ("completed", "failed"):
-                return
-            time.sleep(0.2)
+    while time.time() < timeout:
+        with next(get_session()) as db:
+            discussion = db.get(DiscussionSession, session_id)
+            status = discussion.status if discussion is not None else None
+        if status in (SessionStatus.COMPLETED, SessionStatus.FAILED):
+            return
+        time.sleep(0.2)
+
+
+def _create_db_session(topic: str) -> str:
+    with next(get_session()) as db:
+        project = db.exec(select(Project)).first()
+        scenario = db.exec(select(ScenarioTemplate)).first()
+        assert project is not None
+        assert scenario is not None
+        discussion = DiscussionSession(
+            project_id=project.id,
+            scenario_id=scenario.id,
+            topic=topic,
+            role_ids=[],
+            user_id=project.user_id,
+        )
+        db.add(discussion)
+        db.commit()
+        db.refresh(discussion)
+        return discussion.id
+
+
+def _run_workflow_thread(session_id: str) -> threading.Thread:
+    thread = threading.Thread(target=lambda: asyncio.run(run_session_workflow(session_id)), daemon=True)
+    thread.start()
+    return thread
 
 
 def test_host_agent_loop_produces_flow_result(monkeypatch) -> None:
@@ -342,3 +370,282 @@ def test_search_knowledge_event_and_auto_entry(monkeypatch) -> None:
     assert reference_event is not None
     assert reference_event.payload["matches"]
     assert entry is not None
+
+
+def test_human_review_response_resumes_workflow(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "llm_base_url", None)
+    monkeypatch.setattr(settings, "llm_api_key", None)
+
+    async def fake_host_decide(**kwargs: object) -> dict:
+        context = kwargs["context"]
+        assert isinstance(context, dict)
+        if not context.get("human_review_responses"):
+            return {
+                "action": "REQUEST_HUMAN_REVIEW",
+                "reason": "需要业务口径",
+                "question": "30元阈值按含税还是未税计算？",
+                "blocking_level": "medium",
+                "options": ["含税", "未税"],
+                "default_on_timeout": "mark_open_question",
+                "timeout_seconds": 30,
+                "impact": "影响自动结算规则",
+            }
+        return {"action": "CONCLUDE", "reason": "已收到人工确认"}
+
+    monkeypatch.setattr(gateway, "host_decide", fake_host_decide)
+    session_id = _create_db_session("human review response test")
+    thread = _run_workflow_thread(session_id)
+
+    timeout = time.time() + 10
+    review_id = ""
+    while time.time() < timeout:
+        with next(get_session()) as db:
+            review = db.exec(
+                select(HumanReviewRequest)
+                .where(HumanReviewRequest.session_id == session_id)
+                .where(HumanReviewRequest.status == HumanReviewStatus.PENDING)
+            ).first()
+            if review is not None:
+                review_id = review.id
+                break
+        time.sleep(0.1)
+    assert review_id
+    with client:
+        response = client.post(
+            f"/sessions/{session_id}/human-reviews/{review_id}/respond",
+            json={"answer": "按含税金额计算", "selected_option": "含税"},
+        )
+        assert response.status_code == 200
+
+    _wait_done(session_id)
+    thread.join(timeout=5)
+    with next(get_session()) as db:
+        review = db.get(HumanReviewRequest, review_id)
+        result = db.exec(select(SessionResult).where(SessionResult.session_id == session_id)).first()
+        resolved_event = db.exec(
+            select(SessionEvent)
+            .where(SessionEvent.session_id == session_id)
+            .where(SessionEvent.type == EventType.HUMAN_REVIEW_RESOLVED)
+        ).first()
+
+    assert review is not None
+    assert review.status == HumanReviewStatus.RESOLVED
+    assert result is not None
+    assert resolved_event is not None
+
+
+def test_human_review_timeout_adds_structured_open_question(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "llm_base_url", None)
+    monkeypatch.setattr(settings, "llm_api_key", None)
+
+    calls = {"count": 0}
+
+    async def fake_host_decide(**_: object) -> dict:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return {
+                "action": "REQUEST_HUMAN_REVIEW",
+                "reason": "需要财务口径",
+                "question": "是否必须关联差旅申请单？",
+                "blocking_level": "medium",
+                "options": [],
+                "default_on_timeout": "mark_open_question",
+                "timeout_seconds": 1,
+                "impact": "影响报销风控边界",
+            }
+        return {"action": "CONCLUDE", "reason": "超时后继续"}
+
+    monkeypatch.setattr(gateway, "host_decide", fake_host_decide)
+    session_id = _create_db_session("human review timeout test")
+    thread = _run_workflow_thread(session_id)
+    _wait_done(session_id)
+    thread.join(timeout=5)
+
+    with next(get_session()) as db:
+        result = db.exec(select(SessionResult).where(SessionResult.session_id == session_id)).first()
+        timeout_event = db.exec(
+            select(SessionEvent)
+            .where(SessionEvent.session_id == session_id)
+            .where(SessionEvent.type == EventType.HUMAN_REVIEW_TIMEOUT)
+        ).first()
+
+    assert result is not None
+    assert result.open_questions
+    assert result.open_questions[0]["source"] == "human_review_timeout"
+    assert timeout_event is not None
+
+
+def test_critical_human_review_timeout_fails_session(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "llm_base_url", None)
+    monkeypatch.setattr(settings, "llm_api_key", None)
+
+    async def fake_host_decide(**_: object) -> dict:
+        return {
+            "action": "REQUEST_HUMAN_REVIEW",
+            "reason": "需要授权",
+            "question": "是否允许绕过法务审核？",
+            "blocking_level": "critical",
+            "options": [],
+            "default_on_timeout": "abort_if_blocking",
+            "timeout_seconds": 1,
+            "impact": "影响合规风险",
+        }
+
+    monkeypatch.setattr(gateway, "host_decide", fake_host_decide)
+    session_id = _create_db_session("critical human review timeout test")
+    thread = _run_workflow_thread(session_id)
+    _wait_done(session_id)
+    thread.join(timeout=5)
+
+    with next(get_session()) as db:
+        discussion = db.get(DiscussionSession, session_id)
+        timeout_event = db.exec(
+            select(SessionEvent)
+            .where(SessionEvent.session_id == session_id)
+            .where(SessionEvent.type == EventType.HUMAN_REVIEW_TIMEOUT)
+        ).first()
+
+    assert discussion is not None
+    assert discussion.status == SessionStatus.FAILED
+    assert timeout_event is not None
+
+
+def test_human_review_rejects_duplicate_response(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "api_key", "")
+
+    with next(get_session()) as db:
+        project = db.exec(select(Project)).first()
+        scenario = db.exec(select(ScenarioTemplate)).first()
+        assert project is not None
+        assert scenario is not None
+        discussion = DiscussionSession(
+            project_id=project.id,
+            scenario_id=scenario.id,
+            topic="duplicate human review response",
+            role_ids=[],
+            user_id=project.user_id,
+            status=SessionStatus.PAUSED,
+            current_stage="human_review",
+        )
+        db.add(discussion)
+        db.commit()
+        db.refresh(discussion)
+        review = HumanReviewRequest(
+            session_id=discussion.id,
+            question="是否允许自动结算？",
+            reason="需要确认",
+            impact="影响功能范围",
+        )
+        db.add(review)
+        db.commit()
+        db.refresh(review)
+        session_id = discussion.id
+        review_id = review.id
+
+    with client:
+        first = client.post(f"/sessions/{session_id}/human-reviews/{review_id}/respond", json={"answer": "允许"})
+        second = client.post(f"/sessions/{session_id}/human-reviews/{review_id}/respond", json={"answer": "允许"})
+
+    assert first.status_code == 200
+    assert second.status_code == 409
+
+
+def test_expired_human_review_rejects_response_and_reconciles_stale_session(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "api_key", "")
+
+    with next(get_session()) as db:
+        project = db.exec(select(Project)).first()
+        scenario = db.exec(select(ScenarioTemplate)).first()
+        assert project is not None
+        assert scenario is not None
+        discussion = DiscussionSession(
+            project_id=project.id,
+            scenario_id=scenario.id,
+            topic="expired human review response",
+            role_ids=[],
+            user_id=project.user_id,
+            status=SessionStatus.PAUSED,
+            current_stage="human_review",
+        )
+        db.add(discussion)
+        db.commit()
+        db.refresh(discussion)
+        review = HumanReviewRequest(
+            session_id=discussion.id,
+            question="是否允许自动结算？",
+            reason="需要确认",
+            impact="影响功能范围",
+            expires_at=utc_now() - timedelta(seconds=1),
+        )
+        db.add(review)
+        db.commit()
+        db.refresh(review)
+        session_id = discussion.id
+        review_id = review.id
+
+    with client:
+        response = client.post(f"/sessions/{session_id}/human-reviews/{review_id}/respond", json={"answer": "允许"})
+
+    assert response.status_code == 409
+    with next(get_session()) as db:
+        review = db.get(HumanReviewRequest, review_id)
+        discussion = db.get(DiscussionSession, session_id)
+        timeout_event = db.exec(
+            select(SessionEvent)
+            .where(SessionEvent.session_id == session_id)
+            .where(SessionEvent.type == EventType.HUMAN_REVIEW_TIMEOUT)
+        ).first()
+    assert review is not None
+    assert review.status == HumanReviewStatus.TIMED_OUT
+    assert discussion is not None
+    assert discussion.status == SessionStatus.FAILED
+    assert timeout_event is not None
+
+
+def test_question_classification_does_not_leak_role_questions(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "llm_base_url", None)
+    monkeypatch.setattr(settings, "llm_api_key", None)
+
+    async def fake_complete_structured(**kwargs: object) -> dict:
+        stage = kwargs["stage"]
+        role = kwargs.get("role")
+        role_code = getattr(role, "code", "host")
+        if stage == "independent_review":
+            return {
+                "summary": f"{role_code} summary",
+                "stance": "support",
+                "risks": [],
+                "open_questions": [f"{role_code} exploratory question"],
+                "actions": [],
+                "model_used": "test",
+            }
+        if stage == "judge_and_summarize":
+            return {
+                "summary": "final",
+                "final_conclusion": "已明确自动结算边界。",
+                "stance": "approve",
+                "risks": [],
+                "open_questions": ["仍需法务确认免责条款"],
+                "actions": [],
+                "model_used": "test",
+            }
+        return {
+            "summary": "ok",
+            "stance": "ok",
+            "risks": [],
+            "open_questions": [],
+            "actions": [{"title": "补齐法务确认材料", "owner": "product_manager", "priority": "medium", "status": "todo"}] if stage == "generate_actions" else [],
+            "conflicts": [],
+            "model_used": "test",
+        }
+
+    monkeypatch.setattr(gateway, "complete_structured", fake_complete_structured)
+    session_id = _create_db_session("question classification test")
+    asyncio.run(run_session_workflow(session_id))
+
+    with next(get_session()) as db:
+        result = db.exec(select(SessionResult).where(SessionResult.session_id == session_id)).first()
+
+    assert result is not None
+    assert result.open_questions == ["仍需法务确认免责条款"]
+    assert all("exploratory question" not in str(question) for question in result.open_questions)

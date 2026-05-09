@@ -1,6 +1,7 @@
 import asyncio
 import time
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import Any
 
 from sqlmodel import Session, select
@@ -13,6 +14,9 @@ from astra_api.models import (
     AgentRole,
     DiscussionSession,
     EventType,
+    HumanReviewRequest,
+    HumanReviewStatus,
+    HumanReviewTimeoutBehavior,
     Project,
     ScenarioTemplate,
     SessionEvent,
@@ -24,6 +28,13 @@ from astra_api.models import (
 
 
 gateway = LLMGateway()
+_active_workflows: set[str] = set()
+
+
+def is_session_workflow_active(session_id: str) -> bool:
+    """Expose in-process runner state so REST handlers can distinguish stale paused sessions."""
+
+    return session_id in _active_workflows
 
 
 @dataclass
@@ -39,7 +50,7 @@ class SessionState:
     role_outputs: list[dict[str, Any]] = field(default_factory=list)
     conflicts: list[dict[str, Any]] = field(default_factory=list)
     risks: list[dict[str, Any]] = field(default_factory=list)
-    open_questions: list[str] = field(default_factory=list)
+    open_questions: list[Any] = field(default_factory=list)
     actions: list[dict[str, Any]] = field(default_factory=list)
     final_conclusion: str = ""
     skipped_stages: list[dict[str, Any]] = field(default_factory=list)
@@ -50,6 +61,8 @@ class SessionState:
     iteration: int = 0
     last_progress_iteration: int = 0
     host_decision_history: list[dict[str, Any]] = field(default_factory=list)
+    human_review_responses: list[dict[str, Any]] = field(default_factory=list)
+    human_review_requests: list[dict[str, Any]] = field(default_factory=list)
     started_monotonic: float = field(default_factory=time.monotonic)
 
     @property
@@ -198,6 +211,26 @@ def _unique_questions(*question_groups: list[str]) -> list[str]:
     return questions
 
 
+def _question_key(question: Any) -> str:
+    if isinstance(question, dict):
+        value = question.get("question") or question.get("title") or question.get("summary") or str(question)
+        return str(value).strip()
+    return str(question).strip()
+
+
+def _unique_question_items(*question_groups: list[Any]) -> list[Any]:
+    seen: set[str] = set()
+    questions: list[Any] = []
+    for group in question_groups:
+        for question in group:
+            key = _question_key(question)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            questions.append(question)
+    return questions
+
+
 def _host_context(state: SessionState) -> dict[str, Any]:
     return {
         "topic": state.topic,
@@ -221,6 +254,8 @@ def _host_context(state: SessionState) -> dict[str, Any]:
         "open_questions": state.open_questions,
         "actions": state.actions,
         "failures": state.failures,
+        "human_review_responses": state.human_review_responses,
+        "human_review_requests": state.human_review_requests,
         "knowledge_references": state.knowledge_references,
         "knowledge_search_enabled": True,
         "knowledge_search_attempted": state.knowledge_search_attempted,
@@ -442,6 +477,8 @@ async def execute_decision(state: SessionState, decision: dict[str, Any]) -> boo
         return await execute_ad_hoc_stage(state, decision)
     if action == "SEARCH_KNOWLEDGE":
         return await execute_knowledge_search(state, str(decision.get("query") or state.topic), str(decision.get("reason") or ""))
+    if action == "REQUEST_HUMAN_REVIEW":
+        return await request_human_review(state, decision)
     if action == "PULL_ROLE":
         return pull_role(state, decision)
     if action == "REMOVE_ROLE":
@@ -490,6 +527,165 @@ async def execute_knowledge_search(state: SessionState, query: str, reason: str)
             payload={"query": query, "reason": reason, "matches": matches, "model_used": None},
         )
     return True
+
+
+def _human_review_payload(review: HumanReviewRequest) -> dict[str, Any]:
+    return {
+        "id": review.id,
+        "session_id": review.session_id,
+        "question": review.question,
+        "reason": review.reason,
+        "blocking_level": review.blocking_level,
+        "options": review.options,
+        "status": review.status,
+        "response": review.response,
+        "default_on_timeout": review.default_on_timeout,
+        "default_answer": review.default_answer,
+        "impact": review.impact,
+        "requested_at": review.requested_at.isoformat(),
+        "expires_at": review.expires_at.isoformat() if review.expires_at else None,
+        "resolved_at": review.resolved_at.isoformat() if review.resolved_at else None,
+    }
+
+
+def _review_open_question(review: HumanReviewRequest) -> dict[str, Any]:
+    return {
+        "question": review.question,
+        "source": "human_review_timeout",
+        "blocking_level": review.blocking_level,
+        "impact": review.impact,
+        "status": "unresolved",
+        "review_id": review.id,
+    }
+
+
+def _review_response_context(review: HumanReviewRequest) -> dict[str, Any]:
+    response = review.response if isinstance(review.response, dict) else {}
+    return {
+        "review_id": review.id,
+        "question": review.question,
+        "answer": response.get("answer") or review.default_answer,
+        "selected_option": response.get("selected_option"),
+        "status": review.status,
+        "impact": review.impact,
+    }
+
+
+def _expired(expires_at: Any) -> bool:
+    if not expires_at:
+        return False
+    now = utc_now()
+    if getattr(expires_at, "tzinfo", None) is None and now.tzinfo is not None:
+        now = now.replace(tzinfo=None)
+    return now >= expires_at
+
+
+async def request_human_review(state: SessionState, decision: dict[str, Any]) -> bool:
+    question = str(decision.get("question") or "").strip()
+    reason = str(decision.get("reason") or "").strip()
+    impact = str(decision.get("impact") or "").strip()
+    if not question or not reason or not impact:
+        state.failures.append({"action": "REQUEST_HUMAN_REVIEW", "reason": "missing_required_fields"})
+        return False
+
+    timeout_seconds = int(decision.get("timeout_seconds") or 120)
+    timeout_seconds = max(1, min(timeout_seconds, settings.orchestration_timeout_seconds))
+    try:
+        behavior = HumanReviewTimeoutBehavior(decision.get("default_on_timeout") or HumanReviewTimeoutBehavior.MARK_OPEN_QUESTION)
+    except ValueError:
+        behavior = HumanReviewTimeoutBehavior.MARK_OPEN_QUESTION
+    options = [str(option) for option in decision.get("options") or [] if str(option).strip()]
+    review = HumanReviewRequest(
+        session_id=state.session_id,
+        question=question,
+        reason=reason,
+        blocking_level=str(decision.get("blocking_level") or "medium"),
+        options=options,
+        default_on_timeout=behavior,
+        default_answer=str(decision.get("default_answer") or ""),
+        impact=impact,
+        expires_at=utc_now() + timedelta(seconds=timeout_seconds),
+    )
+    state.human_review_requests.append({"question": question, "reason": reason, "impact": impact})
+    with Session(engine, expire_on_commit=False) as db:
+        db.add(review)
+        db.commit()
+        db.refresh(review)
+        update_session(db, state.session_id, status=SessionStatus.PAUSED, current_stage="human_review")
+        record_event(
+            db,
+            session_id=state.session_id,
+            event_type=EventType.HUMAN_REVIEW_REQUESTED,
+            stage="human_review",
+            role_code="host",
+            payload=_human_review_payload(review),
+        )
+
+    outcome = await _wait_for_human_review(state, review.id)
+    if outcome == "critical_timeout":
+        raise RuntimeError(f"Critical human review timed out: {question}")
+    return True
+
+
+async def _wait_for_human_review(state: SessionState, review_id: str) -> str:
+    while True:
+        with Session(engine, expire_on_commit=False) as db:
+            review = db.get(HumanReviewRequest, review_id)
+            if review is None:
+                state.failures.append({"review_id": review_id, "reason": "human_review_missing"})
+                return "missing"
+            if review.status == HumanReviewStatus.RESOLVED:
+                state.human_review_responses.append(_review_response_context(review))
+                update_session(db, state.session_id, status=SessionStatus.RUNNING)
+                return "resolved"
+            if review.status == HumanReviewStatus.TIMED_OUT:
+                # Another request path may have reconciled an expired review first.
+                update_session(db, state.session_id, status=SessionStatus.RUNNING)
+                return "timeout"
+            if _expired(review.expires_at):
+                return _timeout_human_review(db, state, review)
+        await asyncio.sleep(min(settings.event_poll_interval_seconds, 0.2))
+
+
+def _timeout_human_review(db: Session, state: SessionState, review: HumanReviewRequest) -> str:
+    review.status = HumanReviewStatus.TIMED_OUT
+    review.resolved_at = utc_now()
+    payload_extra: dict[str, Any] = {}
+    if review.default_on_timeout == HumanReviewTimeoutBehavior.USE_DEFAULT:
+        review.response = {"answer": review.default_answer, "source": "timeout_default"}
+        state.human_review_responses.append(_review_response_context(review))
+        payload_extra["used_default"] = True
+    elif review.default_on_timeout == HumanReviewTimeoutBehavior.ABORT_IF_BLOCKING and review.blocking_level == "critical":
+        db.add(review)
+        db.commit()
+        db.refresh(review)
+        record_event(
+            db,
+            session_id=state.session_id,
+            event_type=EventType.HUMAN_REVIEW_TIMEOUT,
+            stage="human_review",
+            role_code="host",
+            payload={**_human_review_payload(review), "aborted": True},
+        )
+        return "critical_timeout"
+    else:
+        open_item = _review_open_question(review)
+        state.open_questions = _unique_question_items(state.open_questions, [open_item])
+        payload_extra["added_open_question"] = open_item
+
+    db.add(review)
+    db.commit()
+    db.refresh(review)
+    update_session(db, state.session_id, status=SessionStatus.RUNNING)
+    record_event(
+        db,
+        session_id=state.session_id,
+        event_type=EventType.HUMAN_REVIEW_TIMEOUT,
+        stage="human_review",
+        role_code="host",
+        payload={**_human_review_payload(review), **payload_extra},
+    )
+    return "timeout"
 
 
 def skip_stage(state: SessionState, stage: str, reason: str) -> bool:
@@ -751,10 +947,74 @@ def _stage_context(state: SessionState, stage: str) -> dict[str, Any]:
     if stage == "judge_and_summarize":
         role_questions = [question for item in state.role_outputs for question in item.get("open_questions", [])]
         context["risks"] = _risk_items(state.role_outputs)
-        context["open_questions"] = _unique_questions(state.open_questions, role_questions)
+        context["open_questions"] = _unique_question_items(state.open_questions, role_questions)
+        context["question_classification_policy"] = {
+            "resolved_by_context": "Fold into final_conclusion, risks, or decision details.",
+            "requires_human_review": "Ask the user only when facts or authorization are missing.",
+            "convert_to_action": "Move executable follow-up work into actions.",
+            "unresolved": "Keep only truly unresolved items in open_questions.",
+        }
     if stage == "generate_actions":
         context["final_conclusion"] = state.final_conclusion
+        context["human_review_responses"] = state.human_review_responses
     return context
+
+
+def _is_review_answered(state: SessionState, question: Any) -> bool:
+    key = _question_key(question)
+    if not key:
+        return True
+    return any(_question_key(item.get("question", "")) == key for item in state.human_review_responses)
+
+
+def _is_question_resolved_by_conclusion(state: SessionState, question: Any) -> bool:
+    key = _question_key(question)
+    if not key or isinstance(question, dict):
+        return False
+    return key in state.final_conclusion
+
+
+def _classify_open_questions(
+    state: SessionState,
+    *,
+    candidates: list[Any],
+    explicit_open_questions: list[Any],
+) -> list[Any]:
+    explicit_keys = {_question_key(question) for question in explicit_open_questions}
+    kept: list[Any] = []
+    for question in candidates:
+        key = _question_key(question)
+        if not key:
+            continue
+        if _is_review_answered(state, question) or _is_question_resolved_by_conclusion(state, question):
+            continue
+        # Role-level exploratory questions are useful inputs, but they should not all leak into final output.
+        # Keep structured timeout items and questions the judgement stage explicitly returned.
+        if isinstance(question, dict) or key in explicit_keys:
+            kept.append(question)
+    return _unique_question_items(kept)
+
+
+def _filter_action_items(actions: list[Any], unresolved_questions: list[Any]) -> list[dict[str, Any]]:
+    unresolved_text = " ".join(_question_key(question) for question in unresolved_questions)
+    filtered: list[dict[str, Any]] = []
+    for action in actions:
+        item = action if isinstance(action, dict) else {"title": str(action)}
+        title = str(item.get("title") or "").strip()
+        if not title:
+            continue
+        if unresolved_text and title in unresolved_text:
+            item = {**item, "blocked_by_open_question": True}
+        filtered.append(
+            {
+                "title": title,
+                "owner": str(item.get("owner") or item.get("assignee_role_code") or "owner TBD"),
+                "priority": str(item.get("priority") or "medium"),
+                "status": str(item.get("status") or "todo"),
+                **{key: value for key, value in item.items() if key not in {"title", "owner", "priority", "status"}},
+            }
+        )
+    return filtered
 
 
 def _apply_stage_output(state: SessionState, stage: str, output: dict[str, Any]) -> None:
@@ -766,10 +1026,14 @@ def _apply_stage_output(state: SessionState, stage: str, output: dict[str, Any])
         role_risks = _risk_items(state.role_outputs)
         role_questions = [question for item in state.role_outputs for question in item.get("open_questions", [])]
         state.risks = output.get("risks") or role_risks
-        state.open_questions = _unique_questions(state.open_questions, role_questions, output.get("open_questions", []))
         state.final_conclusion = output.get("final_conclusion") or output.get("summary", "")
+        state.open_questions = _classify_open_questions(
+            state,
+            candidates=_unique_question_items(state.open_questions, role_questions, output.get("open_questions", [])),
+            explicit_open_questions=output.get("open_questions", []),
+        )
     elif stage == "generate_actions":
-        state.actions = output.get("actions", [])
+        state.actions = _filter_action_items(output.get("actions", []), state.open_questions)
 
 
 async def finalize_minutes(state: SessionState, termination_reason: str | None = None) -> None:
@@ -843,9 +1107,12 @@ def _build_minutes(state: SessionState, termination_reason: str | None) -> str:
 
 
 async def run_session_workflow(session_id: str) -> None:
+    _active_workflows.add(session_id)
     try:
         await run_agentic_session(session_id)
     except Exception as exc:
         with Session(engine, expire_on_commit=False) as db:
             update_session(db, session_id, status=SessionStatus.FAILED, error_message=str(exc), completed_at=utc_now())
             record_event(db, session_id=session_id, event_type=EventType.SESSION_FAILED, payload={"error": str(exc)})
+    finally:
+        _active_workflows.discard(session_id)

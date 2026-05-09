@@ -32,6 +32,9 @@ from astra_api.auth import (
 from astra_api.models import (
     AgentRole,
     DiscussionSession,
+    EventType,
+    HumanReviewRequest,
+    HumanReviewStatus,
     KnowledgeEntry,
     Project,
     ScenarioTemplate,
@@ -44,7 +47,7 @@ from astra_api.models import (
     User,
     utc_now,
 )
-from astra_api.orchestrator import run_session_workflow
+from astra_api.orchestrator import is_session_workflow_active, record_event, run_session_workflow
 from astra_api.knowledge import (
     backfill_missing_entries,
     get_graph_data,
@@ -61,6 +64,8 @@ from astra_api.schemas import (
     KnowledgeEntryRead,
     KnowledgeGraphData,
     KnowledgeSearchResult,
+    HumanReviewRead,
+    HumanReviewResponse,
     ModelProfile,
     ModelTestRequest,
     ModelTestResult,
@@ -214,6 +219,80 @@ def _display_base_url(base_url: str | None) -> str | None:
     if not parsed.netloc:
         return base_url
     return f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme else parsed.netloc
+
+
+def _human_review_payload(review: HumanReviewRequest) -> dict[str, object]:
+    return {
+        "id": review.id,
+        "session_id": review.session_id,
+        "question": review.question,
+        "reason": review.reason,
+        "blocking_level": review.blocking_level,
+        "options": review.options,
+        "status": review.status,
+        "response": review.response,
+        "default_on_timeout": review.default_on_timeout,
+        "default_answer": review.default_answer,
+        "impact": review.impact,
+        "requested_at": review.requested_at.isoformat(),
+        "expires_at": review.expires_at.isoformat() if review.expires_at else None,
+        "resolved_at": review.resolved_at.isoformat() if review.resolved_at else None,
+    }
+
+
+def _pending_human_review(session: Session, session_id: str) -> HumanReviewRequest | None:
+    return session.exec(
+        select(HumanReviewRequest)
+        .where(HumanReviewRequest.session_id == session_id)
+        .where(HumanReviewRequest.status == HumanReviewStatus.PENDING)
+        .order_by(HumanReviewRequest.requested_at.desc())
+    ).first()
+
+
+def _is_expired_review(review: HumanReviewRequest) -> bool:
+    if review.expires_at is None:
+        return False
+    now = utc_now()
+    if review.expires_at.tzinfo is None and now.tzinfo is not None:
+        now = now.replace(tzinfo=None)
+    return now >= review.expires_at
+
+
+def _reconcile_stale_human_review(
+    session: Session,
+    discussion: DiscussionSession,
+    review: HumanReviewRequest,
+) -> None:
+    """Close expired reviews that no active workflow can resume from in memory."""
+
+    if review.status != HumanReviewStatus.PENDING or not _is_expired_review(review):
+        return
+    if is_session_workflow_active(discussion.id):
+        return
+    review.status = HumanReviewStatus.TIMED_OUT
+    review.resolved_at = utc_now()
+    discussion.status = SessionStatus.FAILED
+    discussion.error_message = "Human review timed out while no workflow runner was active."
+    discussion.completed_at = utc_now()
+    discussion.updated_at = utc_now()
+    session.add(review)
+    session.add(discussion)
+    session.commit()
+    session.refresh(review)
+    record_event(
+        session,
+        session_id=discussion.id,
+        event_type=EventType.HUMAN_REVIEW_TIMEOUT,
+        stage="human_review",
+        role_code="host",
+        payload={**_human_review_payload(review), "workflow_inactive": True},
+    )
+    record_event(
+        session,
+        session_id=discussion.id,
+        event_type=EventType.SESSION_FAILED,
+        payload={"error": discussion.error_message, "review_id": review.id},
+    )
 
 
 @api_router.get("/models/profiles", response_model=list[ModelProfile])
@@ -592,6 +671,11 @@ def get_discussion_session(
     discussion = session.get(DiscussionSession, session_id)
     if discussion is None or discussion.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Session not found")
+    pending_review = _pending_human_review(session, discussion.id)
+    if pending_review is not None:
+        _reconcile_stale_human_review(session, discussion, pending_review)
+        session.refresh(discussion)
+        pending_review = _pending_human_review(session, discussion.id)
     result = {
         "id": discussion.id,
         "user_id": discussion.user_id,
@@ -604,6 +688,7 @@ def get_discussion_session(
         "status": discussion.status,
         "current_stage": discussion.current_stage,
         "error_message": discussion.error_message,
+        "pending_human_review": _human_review_payload(pending_review) if pending_review is not None else None,
         "created_at": discussion.created_at,
         "updated_at": discussion.updated_at,
         "completed_at": discussion.completed_at,
@@ -630,6 +715,8 @@ def delete_discussion_session(
     # 级联删除关联事件
     for event in session.exec(select(SessionEvent).where(SessionEvent.session_id == session_id)).all():
         session.delete(event)
+    for review in session.exec(select(HumanReviewRequest).where(HumanReviewRequest.session_id == session_id)).all():
+        session.delete(review)
     # 级联删除关联结果
     result = session.exec(select(SessionResult).where(SessionResult.session_id == session_id)).first()
     if result is not None:
@@ -652,6 +739,55 @@ def get_discussion_result(
     if result is None:
         raise HTTPException(status_code=404, detail="Session result not found")
     return result
+
+
+@api_router.post("/sessions/{session_id}/human-reviews/{review_id}/respond", response_model=HumanReviewRead)
+def respond_human_review(
+    session_id: str,
+    review_id: str,
+    payload: HumanReviewResponse,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> HumanReviewRequest:
+    discussion = session.get(DiscussionSession, session_id)
+    if discussion is None or discussion.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Session not found")
+    review = session.get(HumanReviewRequest, review_id)
+    if review is None or review.session_id != session_id:
+        raise HTTPException(status_code=404, detail="Human review request not found")
+    if review.status != HumanReviewStatus.PENDING:
+        raise HTTPException(status_code=409, detail="Human review request is no longer pending")
+    if _is_expired_review(review):
+        _reconcile_stale_human_review(session, discussion, review)
+        raise HTTPException(status_code=409, detail="Human review request has timed out")
+
+    answer = payload.answer.strip()
+    selected_option = payload.selected_option.strip() if payload.selected_option else ""
+    if not answer and not selected_option:
+        raise HTTPException(status_code=422, detail="Answer or selected option is required")
+
+    review.status = HumanReviewStatus.RESOLVED
+    review.response = {
+        "answer": answer or selected_option,
+        "selected_option": selected_option or None,
+        "notes": payload.notes,
+    }
+    review.resolved_at = utc_now()
+    discussion.status = SessionStatus.RUNNING
+    discussion.updated_at = utc_now()
+    session.add(review)
+    session.add(discussion)
+    session.commit()
+    session.refresh(review)
+    record_event(
+        session,
+        session_id=session_id,
+        event_type=EventType.HUMAN_REVIEW_RESOLVED,
+        stage="human_review",
+        role_code="host",
+        payload=_human_review_payload(review),
+    )
+    return review
 
 
 @api_router.get("/tasks", response_model=PaginatedResponse[TaskRead])

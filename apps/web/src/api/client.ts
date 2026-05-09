@@ -5,6 +5,8 @@ import type {
   KnowledgeEntry,
   KnowledgeGraphData,
   KnowledgeSearchResult,
+  HumanReviewRequest,
+  HumanReviewResponsePayload,
   ModelProfile,
   ModelTestResult,
   PaginatedResponse,
@@ -192,6 +194,14 @@ export const apiClient = {
       method: "POST",
       body: JSON.stringify(actionIndices ? { action_indices: actionIndices } : {}),
     }),
+  respondHumanReview: (sessionId: string, reviewId: string, payload: HumanReviewResponsePayload) =>
+    request<HumanReviewRequest>(
+      `/sessions/${encodeURIComponent(sessionId)}/human-reviews/${encodeURIComponent(reviewId)}/respond`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    ),
 
   // Knowledge Base
   searchKnowledge: (

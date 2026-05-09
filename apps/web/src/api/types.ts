@@ -21,6 +21,9 @@ export type SessionEventType =
   | "parallel_start"
   | "parallel_complete"
   | "knowledge_referenced"
+  | "human_review_requested"
+  | "human_review_resolved"
+  | "human_review_timeout"
   | "session_completed"
   | "session_failed";
 
@@ -105,9 +108,42 @@ export interface SessionEvent {
   created_at: string;
 }
 
-export interface HostDecision {
-  action: "NEXT_STAGE" | "SKIP_STAGE" | "ADD_STAGE" | "SEARCH_KNOWLEDGE" | "PULL_ROLE" | "REMOVE_ROLE" | "PARALLEL_RUN" | "CONCLUDE";
+export type HumanReviewStatus = "pending" | "resolved" | "timed_out";
+export type HumanReviewTimeoutBehavior = "mark_open_question" | "use_default" | "abort_if_blocking";
+
+export interface HumanReviewRequest {
+  id: string;
+  session_id: string;
+  question: string;
   reason: string;
+  blocking_level: "low" | "medium" | "high" | "critical" | string;
+  options: string[];
+  status: HumanReviewStatus;
+  response?: Record<string, unknown> | null;
+  default_on_timeout: HumanReviewTimeoutBehavior;
+  default_answer?: string;
+  impact: string;
+  requested_at: string;
+  expires_at?: string | null;
+  resolved_at?: string | null;
+}
+
+export interface HumanReviewResponsePayload {
+  answer: string;
+  selected_option?: string | null;
+  notes?: string;
+}
+
+export interface HostDecision {
+  action: "NEXT_STAGE" | "SKIP_STAGE" | "ADD_STAGE" | "SEARCH_KNOWLEDGE" | "REQUEST_HUMAN_REVIEW" | "PULL_ROLE" | "REMOVE_ROLE" | "PARALLEL_RUN" | "CONCLUDE";
+  reason: string;
+  question?: string | null;
+  blocking_level?: string | null;
+  options?: string[];
+  default_on_timeout?: HumanReviewTimeoutBehavior | null;
+  default_answer?: string | null;
+  timeout_seconds?: number | null;
+  impact?: string | null;
   query?: string | null;
   stage?: string | null;
   stage_name?: string | null;
@@ -140,7 +176,7 @@ export interface SessionResult {
   key_conflicts: Record<string, unknown>[];
   role_summaries: Record<string, unknown>[];
   risks: Record<string, unknown>[];
-  open_questions: string[];
+  open_questions: (string | Record<string, unknown>)[];
   actions: Record<string, unknown>[];
   actual_flow?: string[];
   skipped_stages?: SkippedStage[];
@@ -287,6 +323,7 @@ export interface DiscussionSession {
   current_stage: string;
   error_message: string | null;
   metrics?: SessionMetrics | null;
+  pending_human_review?: HumanReviewRequest | null;
   created_at: string;
   updated_at: string;
   completed_at: string | null;

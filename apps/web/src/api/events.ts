@@ -16,6 +16,9 @@ const SESSION_EVENT_TYPES: SessionEventType[] = [
   "parallel_start",
   "parallel_complete",
   "knowledge_referenced",
+  "human_review_requested",
+  "human_review_resolved",
+  "human_review_timeout",
   "session_completed",
   "session_failed",
 ];

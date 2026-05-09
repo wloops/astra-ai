@@ -21,6 +21,21 @@ function text(value: unknown, fallback = ""): string {
   return fallback;
 }
 
+function questionText(value: string | Record<string, unknown>, index: number): string {
+  if (typeof value === "string") return value;
+  return text(value.question, text(value.title, `待确认问题 ${index + 1}`));
+}
+
+function questionMeta(value: string | Record<string, unknown>) {
+  if (typeof value === "string") return null;
+  return {
+    source: text(value.source),
+    blocking: text(value.blocking_level),
+    impact: text(value.impact),
+    status: text(value.status),
+  };
+}
+
 export function SessionResult() {
   const [searchParams] = useSearchParams();
   const sessionId = searchParams.get("sessionId") ?? "";
@@ -244,10 +259,20 @@ export function SessionResult() {
               待确认问题
             </h3>
             <ul className="text-sm text-slate-700 space-y-2">
-              {result.open_questions.map((question) => (
-                <li key={question} className="flex gap-2">
+              {result.open_questions.map((question, index) => (
+                <li key={`${questionText(question, index)}-${index}`} className="flex gap-2">
                   <span className="w-1.5 h-1.5 bg-slate-300 rounded-full mt-2 shrink-0" />
-                  <span>{question}</span>
+                  <span>
+                    {questionText(question, index)}
+                    {questionMeta(question) && (
+                      <span className="mt-1 block text-xs text-slate-400">
+                        {[questionMeta(question)?.status, questionMeta(question)?.blocking, questionMeta(question)?.source]
+                          .filter(Boolean)
+                          .join(" · ")}
+                        {questionMeta(question)?.impact ? ` · ${questionMeta(question)?.impact}` : ""}
+                      </span>
+                    )}
+                  </span>
                 </li>
               ))}
             </ul>
@@ -311,6 +336,9 @@ export function SessionResult() {
                         <td className="px-4 py-3 text-slate-600">{text(action.priority)}</td>
                         <td className="px-4 py-3 text-slate-600">{text(action.status)}</td>
                         <td className="px-4 py-3">
+                          {action.blocked_by_open_question && (
+                            <div className="mb-1 text-[11px] text-amber-600">依赖待确认问题</div>
+                          )}
                           <button
                             onClick={() => {
                               apiClient.promoteActions(sessionId, [index]).then((response) => {

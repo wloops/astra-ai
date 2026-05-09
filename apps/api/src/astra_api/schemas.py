@@ -3,7 +3,7 @@ from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from astra_api.models import EventType, SessionStatus, TaskPriority, TaskStatus
+from astra_api.models import EventType, HumanReviewStatus, HumanReviewTimeoutBehavior, SessionStatus, TaskPriority, TaskStatus
 
 T = TypeVar("T")
 
@@ -130,6 +130,13 @@ class SessionMetrics(BaseModel):
 class HostDecision(BaseModel):
     action: str
     reason: str = ""
+    question: str | None = None
+    blocking_level: str | None = None
+    options: list[str] = Field(default_factory=list)
+    default_on_timeout: HumanReviewTimeoutBehavior | None = None
+    default_answer: str | None = None
+    timeout_seconds: int | None = None
+    impact: str | None = None
     stage: str | None = None
     stage_name: str | None = None
     stage_prompt: str | None = None
@@ -164,6 +171,7 @@ class SessionRead(BaseModel):
     current_stage: str
     error_message: str | None
     metrics: SessionMetrics | None = None
+    pending_human_review: dict[str, Any] | None = None
     created_at: datetime
     updated_at: datetime
     completed_at: datetime | None
@@ -178,7 +186,7 @@ class SessionResultRead(BaseModel):
     key_conflicts: list[dict[str, Any]]
     role_summaries: list[dict[str, Any]]
     risks: list[dict[str, Any]]
-    open_questions: list[str]
+    open_questions: list[str | dict[str, Any]]
     actions: list[dict[str, Any]]
     actual_flow: list[str] = []
     skipped_stages: list[dict[str, Any]] = []
@@ -310,6 +318,31 @@ class PromoteResponse(BaseModel):
     skipped: int
     tasks: list[TaskRead]
     skipped_actions: list[dict[str, Any]] = []
+
+
+class HumanReviewRead(BaseModel):
+    id: str
+    session_id: str
+    question: str
+    reason: str
+    blocking_level: str
+    options: list[str]
+    status: HumanReviewStatus
+    response: dict[str, Any] | None = None
+    default_on_timeout: HumanReviewTimeoutBehavior
+    default_answer: str = ""
+    impact: str
+    requested_at: datetime
+    expires_at: datetime | None = None
+    resolved_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class HumanReviewResponse(BaseModel):
+    answer: str
+    selected_option: str | None = None
+    notes: str = ""
 
 
 class UserCreate(BaseModel):

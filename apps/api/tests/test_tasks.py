@@ -1,7 +1,10 @@
 from fastapi.testclient import TestClient
+from sqlmodel import select
 
 from astra_api.config import settings
+from astra_api.db import get_session
 from astra_api.main import app
+from astra_api.models import DiscussionSession, Project, ScenarioTemplate, SessionResult, SessionStatus
 
 
 client = TestClient(app)
@@ -51,20 +54,38 @@ def test_promote_actions_is_idempotent(monkeypatch) -> None:
     monkeypatch.setattr(settings, "llm_base_url", None)
     monkeypatch.setattr(settings, "llm_api_key", None)
 
-    with client:
-        project = _items(client.get("/projects"))[0]
-        scenario = _items(client.get("/scenario-templates"))[0]
-        created = client.post(
-            "/sessions",
-            json={
-                "project_id": project["id"],
-                "scenario_id": scenario["id"],
-                "topic": "promote 集成测试",
-            },
+    with next(get_session()) as db:
+        project = db.exec(select(Project)).first()
+        scenario = db.exec(select(ScenarioTemplate)).first()
+        assert project is not None
+        assert scenario is not None
+        discussion = DiscussionSession(
+            project_id=project.id,
+            scenario_id=scenario.id,
+            topic="promote 集成测试",
+            user_id=project.user_id,
+            status=SessionStatus.COMPLETED,
+            current_stage="finalize_minutes",
         )
-        assert created.status_code == 200
-        session_id = created.json()["id"]
+        db.add(discussion)
+        db.commit()
+        db.refresh(discussion)
+        db.add(
+            SessionResult(
+                session_id=discussion.id,
+                final_conclusion="done",
+                key_conflicts=[],
+                role_summaries=[],
+                risks=[],
+                open_questions=[],
+                actions=[{"title": "Promote action", "owner": "product_manager", "priority": "high", "status": "todo"}],
+                markdown_minutes="# done",
+            )
+        )
+        db.commit()
+        session_id = discussion.id
 
+    with client:
         first = client.post(f"/sessions/{session_id}/promote-actions", json={"action_indices": [0]})
         assert first.status_code == 200
         assert first.json()["created"] == 1

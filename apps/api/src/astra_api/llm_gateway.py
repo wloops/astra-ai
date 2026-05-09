@@ -40,8 +40,15 @@ STAGE_PROMPTS: dict[str, dict[str, Any]] = {
             "Return one JSON object only. Use concise Chinese for the user-facing reason."
         ),
         "schema": {
-            "action": "NEXT_STAGE | SKIP_STAGE | ADD_STAGE | SEARCH_KNOWLEDGE | PULL_ROLE | REMOVE_ROLE | PARALLEL_RUN | CONCLUDE",
+            "action": "NEXT_STAGE | SKIP_STAGE | ADD_STAGE | SEARCH_KNOWLEDGE | REQUEST_HUMAN_REVIEW | PULL_ROLE | REMOVE_ROLE | PARALLEL_RUN | CONCLUDE",
             "reason": "User-facing reason in Chinese",
+            "question": "Question for REQUEST_HUMAN_REVIEW",
+            "blocking_level": "low | medium | high | critical",
+            "options": ["Suggested answer options for REQUEST_HUMAN_REVIEW"],
+            "default_on_timeout": "mark_open_question | use_default | abort_if_blocking",
+            "default_answer": "Conservative default answer for use_default",
+            "timeout_seconds": "Timeout for REQUEST_HUMAN_REVIEW",
+            "impact": "What this decision affects",
             "query": "Knowledge search query for SEARCH_KNOWLEDGE",
             "stage": "Existing stage for NEXT_STAGE/SKIP_STAGE/PARALLEL_RUN",
             "stage_name": "New stage name for ADD_STAGE",
@@ -496,6 +503,7 @@ class LLMGateway:
             "SKIP_STAGE",
             "ADD_STAGE",
             "SEARCH_KNOWLEDGE",
+            "REQUEST_HUMAN_REVIEW",
             "PULL_ROLE",
             "REMOVE_ROLE",
             "PARALLEL_RUN",
@@ -504,10 +512,19 @@ class LLMGateway:
         action = str(data.get("action") or "").upper()
         if action not in allowed_actions:
             return self._local_host_decision(context)
+        if action == "REQUEST_HUMAN_REVIEW" and not self._valid_human_review_request(data, context):
+            return self._local_host_decision(context)
         roles = data.get("roles")
         return {
             "action": action,
             "reason": data.get("reason") if isinstance(data.get("reason"), str) else "",
+            "question": data.get("question") if isinstance(data.get("question"), str) else None,
+            "blocking_level": data.get("blocking_level") if isinstance(data.get("blocking_level"), str) else "medium",
+            "options": [str(option) for option in data.get("options", [])] if isinstance(data.get("options"), list) else [],
+            "default_on_timeout": data.get("default_on_timeout") if isinstance(data.get("default_on_timeout"), str) else "mark_open_question",
+            "default_answer": data.get("default_answer") if isinstance(data.get("default_answer"), str) else "",
+            "timeout_seconds": data.get("timeout_seconds") if isinstance(data.get("timeout_seconds"), int) else 120,
+            "impact": data.get("impact") if isinstance(data.get("impact"), str) else None,
             "query": data.get("query") if isinstance(data.get("query"), str) else None,
             "stage": data.get("stage") if isinstance(data.get("stage"), str) else None,
             "stage_name": data.get("stage_name") if isinstance(data.get("stage_name"), str) else None,
@@ -518,6 +535,16 @@ class LLMGateway:
             "roles": [str(role) for role in roles] if isinstance(roles, list) else [],
             "model_used": data.get("model_used") if isinstance(data.get("model_used"), str) else None,
         }
+
+    def _valid_human_review_request(self, data: dict[str, Any], context: dict[str, Any]) -> bool:
+        request_count = len(context.get("human_review_requests") or [])
+        if request_count >= 3:
+            return False
+        required = [data.get("question"), data.get("reason"), data.get("impact")]
+        if not all(isinstance(item, str) and item.strip() for item in required):
+            return False
+        behavior = str(data.get("default_on_timeout") or "mark_open_question")
+        return behavior in {"mark_open_question", "use_default", "abort_if_blocking"}
 
     def _local_host_decision(self, context: dict[str, Any]) -> dict[str, Any]:
         suggested = [stage for stage in context.get("suggested_stages", []) if isinstance(stage, str)]
@@ -595,8 +622,8 @@ class LLMGateway:
         conflicts = context.get("conflicts")
         if isinstance(conflicts, list) and not conflicts:
             return True
-        if isinstance(conflicts, list) and conflicts and context.get("host_hints"):
-            return True
+        if isinstance(conflicts, list) and conflicts:
+            return False
         role_outputs = context.get("role_outputs")
         if not isinstance(role_outputs, list) or len(role_outputs) < 2:
             return False

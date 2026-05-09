@@ -40,8 +40,23 @@ class EventType(StrEnum):
     PARALLEL_START = "parallel_start"
     PARALLEL_COMPLETE = "parallel_complete"
     KNOWLEDGE_REFERENCED = "knowledge_referenced"
+    HUMAN_REVIEW_REQUESTED = "human_review_requested"
+    HUMAN_REVIEW_RESOLVED = "human_review_resolved"
+    HUMAN_REVIEW_TIMEOUT = "human_review_timeout"
     SESSION_COMPLETED = "session_completed"
     SESSION_FAILED = "session_failed"
+
+
+class HumanReviewStatus(StrEnum):
+    PENDING = "pending"
+    RESOLVED = "resolved"
+    TIMED_OUT = "timed_out"
+
+
+class HumanReviewTimeoutBehavior(StrEnum):
+    MARK_OPEN_QUESTION = "mark_open_question"
+    USE_DEFAULT = "use_default"
+    ABORT_IF_BLOCKING = "abort_if_blocking"
 
 
 class TaskStatus(StrEnum):
@@ -157,6 +172,23 @@ class SessionEvent(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class HumanReviewRequest(SQLModel, table=True):
+    id: str = Field(default_factory=lambda: new_id("review"), primary_key=True)
+    session_id: str = Field(index=True)
+    question: str
+    reason: str = ""
+    blocking_level: str = "medium"
+    options: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    status: HumanReviewStatus = Field(default=HumanReviewStatus.PENDING, index=True)
+    response: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
+    default_on_timeout: HumanReviewTimeoutBehavior = Field(default=HumanReviewTimeoutBehavior.MARK_OPEN_QUESTION)
+    default_answer: str = ""
+    impact: str = ""
+    requested_at: datetime = Field(default_factory=utc_now)
+    expires_at: datetime | None = None
+    resolved_at: datetime | None = None
+
+
 class SessionResult(SQLModel, table=True):
     id: str = Field(default_factory=lambda: new_id("result"), primary_key=True)
     session_id: str = Field(index=True, unique=True)
@@ -164,7 +196,7 @@ class SessionResult(SQLModel, table=True):
     key_conflicts: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
     role_summaries: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
     risks: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
-    open_questions: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    open_questions: list[Any] = Field(default_factory=list, sa_column=Column(JSON))
     actions: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
     actual_flow: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     skipped_stages: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
