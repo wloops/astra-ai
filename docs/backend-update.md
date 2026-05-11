@@ -70,6 +70,37 @@ services:
 
 `apps/api/.env` 只保留在服务器，权限建议为 `600`。
 
+## 生产配置重点
+
+当前后端已启用认证、限流、安全头、多模型路由、知识库和任务管理。生产环境建议显式配置以下变量，避免依赖开发默认值：
+
+```bash
+ASTRA_DATABASE_URL=sqlite:///./data/astra.db
+ASTRA_API_KEY=<api-key>
+ASTRA_JWT_SECRET=<jwt-secret>
+ASTRA_ADMIN_PASSWORD=<admin-password>
+ASTRA_CORS_ORIGINS=https://astra.wlait.com
+ASTRA_RATE_LIMIT_ENABLED=true
+```
+
+模型调用与知识库 embedding 可以分开配置：
+
+```bash
+ASTRA_LLM_BASE_URL=https://api.openai.com/v1
+ASTRA_LLM_API_KEY=<llm-api-key>
+ASTRA_LLM_MODEL=gpt-4o-mini
+ASTRA_LLM_TIMEOUT_SECONDS=60
+ASTRA_LLM_MODEL_PROFILES='{"default":{"model":"gpt-4o-mini"},"strong":{"model":"gpt-4o"}}'
+ASTRA_LLM_STAGE_ROUTING='{"debate":"strong","judge_and_summarize":"strong"}'
+ASTRA_LLM_ROLE_ROUTING='{}'
+
+ASTRA_EMBEDDING_BASE_URL=https://api.openai.com/v1
+ASTRA_EMBEDDING_API_KEY=<embedding-api-key>
+ASTRA_EMBEDDING_MODEL=text-embedding-3-small
+```
+
+不要在终端日志、文档或截图中打印真实 `ASTRA_API_KEY`、`ASTRA_JWT_SECRET`、`ASTRA_LLM_API_KEY`、`ASTRA_EMBEDDING_API_KEY`。如果 embedding 未配置，知识库仍会保留条目并降级使用文本检索。
+
 ## 一键部署
 
 在仓库根目录执行：
@@ -136,9 +167,9 @@ curl https://astra-api.wlait.com/health
 ```bash
 ASTRA_DATABASE_URL=sqlite:///./data/astra.db
 ASTRA_LLM_BASE_URL=https://api.openai.com/v1
-ASTRA_LLM_API_KEY=sk-...
+ASTRA_LLM_API_KEY=<llm-api-key>
 ASTRA_LLM_MODEL=gpt-4o-mini
-ASTRA_LLM_TIMEOUT=60
+ASTRA_LLM_TIMEOUT_SECONDS=60
 ```
 
 多模型路由可选变量：
@@ -155,6 +186,12 @@ ASTRA_LLM_ROLE_ROUTING='{}'
 docker exec astra-api sh -lc 'for name in ASTRA_LLM_BASE_URL ASTRA_LLM_MODEL ASTRA_LLM_API_KEY ASTRA_LLM_MODEL_PROFILES ASTRA_LLM_STAGE_ROUTING ASTRA_LLM_ROLE_ROUTING; do if [ -n "${!name}" ]; then echo "${name}=SET"; else echo "${name}=MISSING"; fi; done'
 ```
 
+embedding 配置检查同样只输出是否存在：
+
+```bash
+docker exec astra-api sh -lc 'for name in ASTRA_EMBEDDING_BASE_URL ASTRA_EMBEDDING_MODEL ASTRA_EMBEDDING_API_KEY; do if [ -n "${!name}" ]; then echo "${name}=SET"; else echo "${name}=MISSING"; fi; done'
+```
+
 如果 `/models/profiles` 已显示真实模型，但 Session 仍然异常秒出，需要看日志区分：
 
 - 模型接口超时或返回 5xx，后端进入 fallback。
@@ -168,6 +205,19 @@ docker compose logs --tail=120 api
 ```
 
 重点搜索：`timeout`、`503`、`fallback`、`JSON`、`model`。
+
+## 功能健康检查
+
+部署后建议至少检查以下端点和页面对应能力：
+
+```bash
+curl http://127.0.0.1:8010/health
+curl http://127.0.0.1:8010/models/profiles -H "Authorization: Bearer <token>"
+curl http://127.0.0.1:8010/knowledge/entries -H "Authorization: Bearer <token>"
+curl http://127.0.0.1:8010/tasks -H "Authorization: Bearer <token>"
+```
+
+如果使用 API Key fallback，也可以通过 `X-API-Key: <api-key>` Header 或 `?api_key=<api-key>` 查询参数进行同等检查。不要把 token 或 API Key 写入仓库。
 
 ## 回滚
 

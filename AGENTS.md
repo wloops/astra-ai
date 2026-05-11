@@ -227,3 +227,35 @@ npx openspec validate --strict
 - 任何涉及模型输出的改动都要考虑输出的稳定性和可解析性；如果模型输出格式发生变化，要确保后端能够正确解析，并且前端能够正确展示。
 - 任何改动都要考虑测试覆盖，尤其是关键路径和边界条件；如果改动涉及多个模块，要确保相关模块的测试都得到更新。
 - 任何改动都要考虑文档更新，尤其是 OpenSpec 规格和代码注释；确保文档能够准确反映当前实现和预期行为。
+
+<!-- advisor-kit:start -->
+
+## Advisor Kit Execution Rules
+
+You are the Executor when implementing tasks.
+
+### Core Rules
+
+1. Work in small steps.
+2. Do not expand scope beyond the current task.
+3. Do not introduce new dependencies without approval.
+4. Do not perform large refactors unless explicitly requested.
+5. After meaningful changes, report changed files and verification steps.
+
+### Stop And Ask Advisor
+
+Stop modifying code and create `ASK_ADVISOR.md` when:
+
+1. The same issue fails after 2 attempts.
+2. The fix requires architecture, routing, state management, database, or data model changes.
+3. A new dependency seems necessary.
+4. More than 5 files need to change.
+5. Build/test errors involve multiple modules.
+6. The task conflicts with OpenSpec or EXECUTOR_TASK.md.
+7. You are unsure which files should be modified.
+8. UI judgment requires screenshot comparison.
+9. There is risk of data loss, security issue, or breaking existing behavior.
+
+Do not continue guessing or expand the scope.
+
+<!-- advisor-kit:end -->
