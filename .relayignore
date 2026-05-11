@@ -1,0 +1,13 @@
+# relay-kit context ignore rules
+.env
+.env.*
+node_modules/
+dist/
+build/
+coverage/
+.git/
+*.pem
+*.key
+*.crt
+*.p12
+*.log

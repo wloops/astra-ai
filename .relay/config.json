@@ -1,0 +1,58 @@
+{
+  "projectName": "astra-ai",
+  "language": "zh",
+  "mode": "openspec",
+  "handoffDir": "docs/agent-handoffs",
+  "openSpecDir": "openspec",
+  "sourceDirs": [
+    "src",
+    "apps",
+    "packages"
+  ],
+  "packageManager": "npm",
+  "devCommand": "npm run dev",
+  "buildCommand": "",
+  "testCommand": "",
+  "defaultExecutor": "opencode",
+  "defaultAdvisor": "",
+  "maxDiffLines": 500,
+  "maxLogLines": 160,
+  "includeGitDiff": true,
+  "includeOpenSpec": true,
+  "includePackageScripts": true,
+  "runLayout": "runs-lanes",
+  "defaultLane": "main",
+  "excludePatterns": [
+    ".env",
+    ".env.*",
+    "node_modules/",
+    "dist/",
+    "build/",
+    "coverage/",
+    ".git/",
+    "*.pem",
+    "*.key",
+    "*.crt",
+    "*.p12",
+    "*.log"
+  ],
+  "skills": {
+    "install": {
+      "manager": true,
+      "claudeProject": true,
+      "codexProject": true,
+      "claudeUser": false,
+      "codexUser": false
+    },
+    "enabled": [
+      "relay-planner",
+      "relay-delegator",
+      "relay-escalation",
+      "relay-reviewer"
+    ],
+    "optional": [
+      "relay-lane-planner",
+      "relay-docs"
+    ]
+  }
+}

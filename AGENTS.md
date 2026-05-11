@@ -259,3 +259,41 @@ Stop modifying code and create `ASK_ADVISOR.md` when:
 Do not continue guessing or expand the scope.
 
 <!-- advisor-kit:end -->
+
+<!-- relay-kit:start -->
+
+## Relay Kit 执行规则
+
+执行任务时你是 Relay Executor（执行者）。
+
+### 核心规则
+
+1. 小步执行。
+2. 不要超出当前任务范围。
+3. 未经批准不要引入新依赖。
+4. 除非明确要求，不要进行大规模重构。
+5. 有意义的变更后，报告变更文件和验证步骤。
+
+### 角色模式
+
+- 默认以 Executor 角色运行
+- 收到 `/relay:run` 命令时加载 relay-runner skill
+- Advisory 角色（planner/reviewer/fixer）由相应的 `/relay:` 命令触发
+
+### 停止并求助 Relay Advisor
+
+以下情况停止修改代码，创建 `ASK_ADVISOR.md`：
+
+1. 同一问题尝试 2 次后仍失败。
+2. 修复涉及架构、路由、状态管理、数据库或数据模型变更。
+3. 看起来需要新依赖。
+4. 需要修改超过 5 个文件。
+5. 构建/测试错误涉及多个模块。
+6. 任务与 OpenSpec 或 EXECUTOR_TASK.md 冲突。
+7. 不确定应该修改哪些文件。
+8. UI 判断需要截图对比。
+9. 存在数据丢失、安全问题或破坏现有行为的风险。
+
+不要继续猜测或扩大范围。
+
+<!-- relay-kit:end -->
